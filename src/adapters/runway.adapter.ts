@@ -200,6 +200,8 @@ export class RunwayAdapter implements IRunwayAdapter {
 
     if (isSeedance) {
       // ── Seedance 2.0: Multi-reference 槽位上传 ──
+      // UI: 3 个 Reference 槽位，每个内有铅笔图标 + 上传箭头图标
+      //     下方有 "+ References" 按钮
       for (let i = 0; i < imagePaths.length; i++) {
         const filePath = imagePaths[i]
         console.log(`[Adapter] Uploading Seedance reference ${i + 1}/${imagePaths.length}: ${filePath}`)
@@ -207,81 +209,152 @@ export class RunwayAdapter implements IRunwayAdapter {
         const result: string = await wc.executeJavaScript(`
           (function() {
             var slotIndex = ${i};
-            var fileName = ${JSON.stringify(filePath.split(/[/\\\\]/).pop() || 'image.png')};
 
-            // 策略 A: 查找 "Reference" 标签对应的上传槽
-            // Seedance 2.0 界面中每个槽位标记为 "Reference" 文本
+            // 策略 A: 查找上传图标按钮（白色上箭头图标在方形内）
+            // 优先 aria-label，其次 title，再次 SVG 内容
+            var uploadBtns = [];
             var all = document.querySelectorAll('*');
-            var referenceSlots = [];
-            for (var k = 0; k < all.length; k++) {
-              var el = all[k];
-              var txt = (el.textContent || '').trim();
-              // 精确匹配 "Reference" 文本（标签）
-              if (txt === 'Reference' && el.offsetParent !== null) {
-                // 获取该标签所在的容器
-                var container = el.closest('[class*="reference"], [class*="Reference"], [class*="slot"], [class*="upload"], [class*="drop"]') || el.parentElement;
-                if (container && referenceSlots.indexOf(container) === -1) {
-                  referenceSlots.push(container);
-                }
+
+            // A1: 通过 aria-label 查找上传按钮
+            var ariaBtns = document.querySelectorAll(
+              '[aria-label*="upload" i], [aria-label*="Upload" i], ' +
+              '[title*="upload" i], [title*="Upload" i], ' +
+              '[aria-label*="reference" i], [aria-label*="Reference" i]'
+            );
+            for (var k = 0; k < ariaBtns.length; k++) {
+              if (ariaBtns[k].offsetParent !== null && uploadBtns.indexOf(ariaBtns[k]) === -1) {
+                uploadBtns.push(ariaBtns[k]);
               }
             }
 
-            // 如果没找到精确的 "Reference"，尝试找空的占位槽
-            if (referenceSlots.length === 0) {
-              for (var k = 0; k < all.length; k++) {
-                var el = all[k];
-                // 查找看起来像上传槽的元素（有虚线边框、有 + 号等特征）
-                var style = el.style || {};
-                var hasPlaceholder = (el.textContent || '').trim().indexOf('+') >= 0 ||
-                  (el.className && typeof el.className === 'string' &&
-                    (el.className.indexOf('upload') >= 0 || el.className.indexOf('drop') >= 0 ||
-                     el.className.indexOf('slot') >= 0 || el.className.indexOf('placeholder') >= 0));
-                if (hasPlaceholder && el.offsetParent !== null && referenceSlots.indexOf(el) === -1) {
-                  referenceSlots.push(el);
-                }
-              }
-            }
-
-            if (referenceSlots.length === 0) return 'NO_SLOTS';
-
-            // 如果槽位数不够，尝试点击 "+ References" 添加更多
-            if (slotIndex >= referenceSlots.length) {
-              var addBtn = document.querySelector('[class*="add"], [class*="Add"]');
-              // 或者通过文本找 "+ References"
-              if (!addBtn) {
-                for (var k = 0; k < all.length; k++) {
-                  var t = (all[k].textContent || '').trim();
-                  if (t.indexOf('+') >= 0 && t.indexOf('Reference') >= 0 && all[k].offsetParent !== null) {
-                    addBtn = all[k];
-                    break;
+            // A2: 查找包含上传 SVG 图标的可点击元素
+            if (uploadBtns.length === 0) {
+              var svgs = document.querySelectorAll('svg');
+              for (var k = 0; k < svgs.length; k++) {
+                var svg = svgs[k];
+                // 上传图标通常是箭头向上的 path
+                var svgHTML = svg.outerHTML.toLowerCase();
+                if (svgHTML.indexOf('arrow') >= 0 || svgHTML.indexOf('upload') >= 0 ||
+                    (svgHTML.indexOf('path') >= 0 && svg.offsetParent !== null)) {
+                  // 向上查找最近的 button 或 clickable 元素
+                  var clickable = svg.closest('button, [role="button"], [class*="upload"], [class*="icon"]');
+                  if (clickable && clickable.offsetParent !== null && uploadBtns.indexOf(clickable) === -1) {
+                    uploadBtns.push(clickable);
                   }
                 }
               }
-              if (addBtn) {
-                addBtn.click();
-                return 'CLICKED_ADD:' + slotIndex;
-              }
-              // 没有更多槽位，使用最后一个
-              slotIndex = referenceSlots.length - 1;
             }
 
-            var targetSlot = referenceSlots[slotIndex];
-            if (!targetSlot) return 'NO_TARGET';
+            // A3: 查找有 upload/Upload 类名的 button
+            if (uploadBtns.length === 0) {
+              for (var k = 0; k < all.length; k++) {
+                var el = all[k];
+                if (el.offsetParent === null) continue;
+                var cls = (el.className && typeof el.className === 'string') ? el.className : '';
+                var tag = el.tagName || '';
+                if ((tag === 'BUTTON' || tag === 'A' || el.getAttribute('role') === 'button') &&
+                    (cls.indexOf('upload') >= 0 || cls.indexOf('Upload') >= 0)) {
+                  uploadBtns.push(el);
+                }
+              }
+            }
 
-            // 对目标槽位模拟点击（打开文件选择器）
-            targetSlot.click();
+            // A4: 在 reference slot 容器内查找 icon/button
+            if (uploadBtns.length === 0) {
+              // 查找包含 "Reference" 标签文本的容器
+              for (var k = 0; k < all.length; k++) {
+                var el = all[k];
+                if (el.offsetParent === null) continue;
+                var txt = (el.textContent || '').trim();
+                if (txt === 'Reference' && el.children.length <= 2) {
+                  // 这是 "Reference" 标签本身，向上找容器
+                  var container = el.parentElement;
+                  if (container) {
+                    // 在容器内找所有 button 或 icon 元素
+                    var btns = container.querySelectorAll('button, [role="button"], [class*="icon"], [class*="btn"]');
+                    for (var j = 0; j < btns.length; j++) {
+                      if (btns[j].offsetParent !== null && uploadBtns.indexOf(btns[j]) === -1) {
+                        uploadBtns.push(btns[j]);
+                      }
+                    }
+                    // 如果容器本身就是 clickable
+                    if (uploadBtns.length === 0 && (container.tagName === 'BUTTON' || container.getAttribute('role') === 'button')) {
+                      uploadBtns.push(container);
+                    }
+                  }
+                }
+              }
+            }
 
-            return 'CLICKED:' + slotIndex;
+            // A5: 最后一个兜底 — 查找有 "+" 号和 "Reference" 文本的可点击元素
+            if (uploadBtns.length === 0) {
+              for (var k = 0; k < all.length; k++) {
+                var el = all[k];
+                if (el.offsetParent === null) continue;
+                var txt = (el.textContent || '').trim();
+                var tag = el.tagName || '';
+                if ((tag === 'BUTTON' || el.getAttribute('role') === 'button' || el.onclick !== null) &&
+                    el.children.length === 0 &&
+                    (txt === '+' || txt.indexOf('upload') >= 0 || txt.indexOf('Upload') >= 0)) {
+                  uploadBtns.push(el);
+                }
+              }
+            }
+
+            if (uploadBtns.length === 0) return 'NO_BUTTONS:found_0_upload_buttons';
+
+            // "+ References" 按钮 — 如果槽不够用，先点它扩展
+            if (slotIndex >= uploadBtns.length) {
+              var addBtn = null;
+              for (var k = 0; k < all.length; k++) {
+                var el = all[k];
+                if (el.offsetParent === null) continue;
+                var txt = (el.textContent || '').trim();
+                if ((txt.indexOf('+') >= 0 && txt.indexOf('Reference') >= 0) ||
+                    txt === '+ References') {
+                  addBtn = el;
+                  break;
+                }
+              }
+              if (addBtn) {
+                var addRect = addBtn.getBoundingClientRect();
+                addBtn.dispatchEvent(new MouseEvent('click', {
+                  bubbles: true, cancelable: true,
+                  clientX: addRect.left + addRect.width / 2,
+                  clientY: addRect.top + addRect.height / 2,
+                  button: 0,
+                }));
+                addBtn.click();
+                return 'CLICKED_ADD';
+              }
+              // 没有更多槽，复用最后一个
+              slotIndex = uploadBtns.length - 1;
+            }
+
+            var btn = uploadBtns[slotIndex];
+            if (!btn) return 'NO_BUTTON_AT_INDEX';
+
+            // 用 MouseEvent 点击（确保 React 能捕获）
+            var rect = btn.getBoundingClientRect();
+            btn.dispatchEvent(new MouseEvent('click', {
+              bubbles: true, cancelable: true,
+              clientX: rect.left + rect.width / 2,
+              clientY: rect.top + rect.height / 2,
+              button: 0,
+            }));
+            btn.click();
+
+            return 'CLICKED:' + slotIndex + ' tag=' + (btn.tagName || '?');
           })()
         `)
 
         console.log(`[Adapter] Seedance slot ${i} result: ${result}`)
 
-        if (result === 'NO_SLOTS') {
-          console.warn(`[Adapter] Seedance: No reference slots found for image ${i + 1}`)
+        if (result.startsWith('NO_BUTTONS')) {
+          console.warn(`[Adapter] Seedance: No upload buttons found. Run diagnose to inspect DOM.`)
         }
 
-        // 等待上传处理
+        // 等待上传对话框 / 处理
         await new Promise((r) => setTimeout(r, 1500))
       }
     } else {
