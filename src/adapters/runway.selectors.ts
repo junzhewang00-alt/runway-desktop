@@ -25,10 +25,14 @@ export const RUNWAY_SELECTORS = {
   statusContainer: '[data-testid*="generation"], [class*="progress"], [class*="status"]',
 
   // ── 参考图上传 ──
-  /** 首帧图 / 参考图上传区域 */
+  /** 首帧图 / 参考图上传区域 (WAN 2.6 / Gen-4) */
   firstFrameUpload: '[class*="FirstFrame"], [class*="first-frame"], [class*="upload"], [class*="Upload"], [data-testid*="upload"] input[type="file"]',
   /** 文件上传隐藏 input */
   hiddenFileInput: 'input[type="file"]',
+  /** Seedance 2.0 Multi-reference 参考槽位 */
+  seedanceReferenceSlot: '[class*="reference"], [class*="Reference"], [class*="slot"], [class*="upload-slot"]',
+  /** Seedance 2.0 "+ References" 按钮 */
+  seedanceAddReference: '[class*="add"], [class*="Add"]',
 } as const
 
 /** Adapter 操作超时（毫秒） */

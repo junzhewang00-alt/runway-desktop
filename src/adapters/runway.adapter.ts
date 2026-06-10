@@ -29,7 +29,7 @@ export interface IRunwayAdapter {
   acquireLockForTask(taskId: string): Promise<void>
   releaseLockForTask(taskId: string): void
   /** 上传参考图到 Runway 页面 */
-  uploadReferenceImages(imagePaths: string[]): Promise<void>
+  uploadReferenceImages(imagePaths: string[], modelId: string): Promise<void>
   /** 并发提交：仅提交不等待，完成后由 CDP monitor 回调 */
   submitOnly(taskId: string, modelId: string, prompt: string, imagePaths?: string[]): Promise<void>
   /** 启动持久 CDP 网络监听（应用启动时调用一次） */
@@ -188,69 +188,156 @@ export class RunwayAdapter implements IRunwayAdapter {
   /**
    * 将参考图上传到 Runway 页面的首帧图/参考图区域
    *
-   * 策略：查找 Runway 页面上的隐藏 <input type="file"> 或上传区域，
-   * 通过构造 File 对象 + DataTransfer 模拟用户拖拽上传。
+   * 策略因模型而异：
+   * - WAN 2.6 / Gen-4: 查找 "First Video Frame" 拖放区
+   * - Seedance 2.0: 查找 "Reference" 占位槽，逐个填充
    */
-  async uploadReferenceImages(imagePaths: string[]): Promise<void> {
+  async uploadReferenceImages(imagePaths: string[], modelId: string): Promise<void> {
     if (imagePaths.length === 0) return
 
     const wc = this.getWebContents()
+    const isSeedance = modelId === 'seedance-2'
 
-    for (let i = 0; i < imagePaths.length; i++) {
-      const filePath = imagePaths[i]
-      console.log(`[Adapter] Uploading reference image ${i + 1}/${imagePaths.length}: ${filePath}`)
+    if (isSeedance) {
+      // ── Seedance 2.0: Multi-reference 槽位上传 ──
+      for (let i = 0; i < imagePaths.length; i++) {
+        const filePath = imagePaths[i]
+        console.log(`[Adapter] Uploading Seedance reference ${i + 1}/${imagePaths.length}: ${filePath}`)
 
-      const uploaded: boolean = await wc.executeJavaScript(`
-        (function() {
-          // 策略 A: 查找拖放区域
-          var dropTargets = document.querySelectorAll(
-            '[class*="FirstFrame"], [class*="first-frame"], ' +
-            '[class*="upload-area"], [class*="Upload"], ' +
-            '[class*="dropzone"], [class*="DropZone"]'
-          );
+        const result: string = await wc.executeJavaScript(`
+          (function() {
+            var slotIndex = ${i};
+            var fileName = ${JSON.stringify(filePath.split(/[/\\\\]/).pop() || 'image.png')};
 
-          if (dropTargets.length === 0) {
-            // 查找包含 "First Video Frame" 文本的父元素
+            // 策略 A: 查找 "Reference" 标签对应的上传槽
+            // Seedance 2.0 界面中每个槽位标记为 "Reference" 文本
             var all = document.querySelectorAll('*');
+            var referenceSlots = [];
             for (var k = 0; k < all.length; k++) {
-              var txt = (all[k].textContent || '').trim();
-              if (txt === 'First Video Frame' && all[k].offsetParent !== null) {
-                var closest = all[k].closest('div, section, [class*="upload"]');
-                dropTargets = [closest || all[k]];
-                break;
+              var el = all[k];
+              var txt = (el.textContent || '').trim();
+              // 精确匹配 "Reference" 文本（标签）
+              if (txt === 'Reference' && el.offsetParent !== null) {
+                // 获取该标签所在的容器
+                var container = el.closest('[class*="reference"], [class*="Reference"], [class*="slot"], [class*="upload"], [class*="drop"]') || el.parentElement;
+                if (container && referenceSlots.indexOf(container) === -1) {
+                  referenceSlots.push(container);
+                }
               }
             }
-          }
 
-          if (dropTargets.length === 0) return false;
+            // 如果没找到精确的 "Reference"，尝试找空的占位槽
+            if (referenceSlots.length === 0) {
+              for (var k = 0; k < all.length; k++) {
+                var el = all[k];
+                // 查找看起来像上传槽的元素（有虚线边框、有 + 号等特征）
+                var style = el.style || {};
+                var hasPlaceholder = (el.textContent || '').trim().indexOf('+') >= 0 ||
+                  (el.className && typeof el.className === 'string' &&
+                    (el.className.indexOf('upload') >= 0 || el.className.indexOf('drop') >= 0 ||
+                     el.className.indexOf('slot') >= 0 || el.className.indexOf('placeholder') >= 0));
+                if (hasPlaceholder && el.offsetParent !== null && referenceSlots.indexOf(el) === -1) {
+                  referenceSlots.push(el);
+                }
+              }
+            }
 
-          // 构造 DataTransfer 模拟拖拽
-          var dt = new DataTransfer();
-          var fileName = ${JSON.stringify(filePath.split(/[/\\\\]/).pop() || 'image.png')};
-          try {
-            dt.items.add(new File([''], fileName, { type: 'image/png' }));
-          } catch(e) {
-            return false;
-          }
+            if (referenceSlots.length === 0) return 'NO_SLOTS';
 
-          ;['dragenter', 'dragover', 'drop'].forEach(function(type) {
-            var ev = new DragEvent(type, {
-              bubbles: true, cancelable: true,
-              dataTransfer: dt,
-            });
-            dropTargets[0].dispatchEvent(ev);
-          });
+            // 如果槽位数不够，尝试点击 "+ References" 添加更多
+            if (slotIndex >= referenceSlots.length) {
+              var addBtn = document.querySelector('[class*="add"], [class*="Add"]');
+              // 或者通过文本找 "+ References"
+              if (!addBtn) {
+                for (var k = 0; k < all.length; k++) {
+                  var t = (all[k].textContent || '').trim();
+                  if (t.indexOf('+') >= 0 && t.indexOf('Reference') >= 0 && all[k].offsetParent !== null) {
+                    addBtn = all[k];
+                    break;
+                  }
+                }
+              }
+              if (addBtn) {
+                addBtn.click();
+                return 'CLICKED_ADD:' + slotIndex;
+              }
+              // 没有更多槽位，使用最后一个
+              slotIndex = referenceSlots.length - 1;
+            }
 
-          return true;
-        })()
-      `)
+            var targetSlot = referenceSlots[slotIndex];
+            if (!targetSlot) return 'NO_TARGET';
 
-      if (!uploaded) {
-        console.warn(`[Adapter] Cannot upload image ${filePath} — Runway upload area not found in DOM`)
+            // 对目标槽位模拟点击（打开文件选择器）
+            targetSlot.click();
+
+            return 'CLICKED:' + slotIndex;
+          })()
+        `)
+
+        console.log(`[Adapter] Seedance slot ${i} result: ${result}`)
+
+        if (result === 'NO_SLOTS') {
+          console.warn(`[Adapter] Seedance: No reference slots found for image ${i + 1}`)
+        }
+
+        // 等待上传处理
+        await new Promise((r) => setTimeout(r, 1500))
       }
+    } else {
+      // ── WAN 2.6 / Gen-4: First Video Frame 拖放上传 ──
+      for (let i = 0; i < imagePaths.length; i++) {
+        const filePath = imagePaths[i]
+        console.log(`[Adapter] Uploading reference image ${i + 1}/${imagePaths.length}: ${filePath}`)
 
-      // 等待上传完成
-      await new Promise((r) => setTimeout(r, 1000))
+        const uploaded: boolean = await wc.executeJavaScript(`
+          (function() {
+            var dropTargets = document.querySelectorAll(
+              '[class*="FirstFrame"], [class*="first-frame"], ' +
+              '[class*="upload-area"], [class*="Upload"], ' +
+              '[class*="dropzone"], [class*="DropZone"]'
+            );
+
+            if (dropTargets.length === 0) {
+              var all = document.querySelectorAll('*');
+              for (var k = 0; k < all.length; k++) {
+                var txt = (all[k].textContent || '').trim();
+                if (txt === 'First Video Frame' && all[k].offsetParent !== null) {
+                  var closest = all[k].closest('div, section, [class*="upload"]');
+                  dropTargets = [closest || all[k]];
+                  break;
+                }
+              }
+            }
+
+            if (dropTargets.length === 0) return false;
+
+            var dt = new DataTransfer();
+            var fileName = ${JSON.stringify(filePath.split(/[/\\\\]/).pop() || 'image.png')};
+            try {
+              dt.items.add(new File([''], fileName, { type: 'image/png' }));
+            } catch(e) {
+              return false;
+            }
+
+            ;['dragenter', 'dragover', 'drop'].forEach(function(type) {
+              var ev = new DragEvent(type, {
+                bubbles: true, cancelable: true,
+                dataTransfer: dt,
+              });
+              dropTargets[0].dispatchEvent(ev);
+            });
+
+            return true;
+          })()
+        `)
+
+        if (!uploaded) {
+          console.warn(`[Adapter] Cannot upload image ${filePath} — Runway upload area not found in DOM`)
+        }
+
+        await new Promise((r) => setTimeout(r, 1000))
+      }
     }
 
     console.log(`[Adapter] Reference image upload complete: ${imagePaths.length} images`)
@@ -302,7 +389,7 @@ export class RunwayAdapter implements IRunwayAdapter {
 
         // 3. 上传参考图（如有）
         if (imagePaths && imagePaths.length > 0) {
-          await this.uploadReferenceImages(imagePaths)
+          await this.uploadReferenceImages(imagePaths, modelId)
         }
 
         // 4. 填充提示词
