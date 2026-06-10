@@ -186,11 +186,11 @@ export class RunwayAdapter implements IRunwayAdapter {
    * 生成完成后由持久 CDP monitor 通过 setCompletionCallback 回调通知。
    */
   /**
-   * 将参考图上传到 Runway 页面的首帧图/参考图区域
+   * 将参考图上传到 Runway 页面。
    *
    * 策略因模型而异：
-   * - WAN 2.6 / Gen-4: 查找 "First Video Frame" 拖放区
-   * - Seedance 2.0: 查找 "Reference" 占位槽，逐个填充
+   * - WAN 2.6 / Gen-4: 查找 "First Video Frame" 拖放区，模拟 DragEvent
+   * - Seedance 2.0: 查找页面上的 <input type="file">，通过 CDP 注入文件
    */
   async uploadReferenceImages(imagePaths: string[], modelId: string): Promise<void> {
     if (imagePaths.length === 0) return
@@ -199,163 +199,138 @@ export class RunwayAdapter implements IRunwayAdapter {
     const isSeedance = modelId === 'seedance-2'
 
     if (isSeedance) {
-      // ── Seedance 2.0: Multi-reference 槽位上传 ──
-      // UI: 3 个 Reference 槽位，每个内有铅笔图标 + 上传箭头图标
-      //     下方有 "+ References" 按钮
-      for (let i = 0; i < imagePaths.length; i++) {
-        const filePath = imagePaths[i]
-        console.log(`[Adapter] Uploading Seedance reference ${i + 1}/${imagePaths.length}: ${filePath}`)
+      // ── Seedance 2.0: 点击参考槽 + CDP 文件注入 ──
+      // 策略：
+      //   1. 点击 Reference 槽位上的上传图标按钮（激活该槽位）
+      //   2. 通过 CDP DOM.querySelectorAll 找到 <input type="file">
+      //   3. 用 CDP DOM.setFileInputFiles 注入文件（绕过原生对话框）
+      //   4. 派发 change 事件通知 React
+      const dbg = wc.debugger
+      const wasAttached = dbg.isAttached()
 
-        const result: string = await wc.executeJavaScript(`
-          (function() {
-            var slotIndex = ${i};
-
-            // 策略 A: 查找上传图标按钮（白色上箭头图标在方形内）
-            // 优先 aria-label，其次 title，再次 SVG 内容
-            var uploadBtns = [];
-            var all = document.querySelectorAll('*');
-
-            // A1: 通过 aria-label 查找上传按钮
-            var ariaBtns = document.querySelectorAll(
-              '[aria-label*="upload" i], [aria-label*="Upload" i], ' +
-              '[title*="upload" i], [title*="Upload" i], ' +
-              '[aria-label*="reference" i], [aria-label*="Reference" i]'
-            );
-            for (var k = 0; k < ariaBtns.length; k++) {
-              if (ariaBtns[k].offsetParent !== null && uploadBtns.indexOf(ariaBtns[k]) === -1) {
-                uploadBtns.push(ariaBtns[k]);
-              }
-            }
-
-            // A2: 查找包含上传 SVG 图标的可点击元素
-            if (uploadBtns.length === 0) {
-              var svgs = document.querySelectorAll('svg');
-              for (var k = 0; k < svgs.length; k++) {
-                var svg = svgs[k];
-                // 上传图标通常是箭头向上的 path
-                var svgHTML = svg.outerHTML.toLowerCase();
-                if (svgHTML.indexOf('arrow') >= 0 || svgHTML.indexOf('upload') >= 0 ||
-                    (svgHTML.indexOf('path') >= 0 && svg.offsetParent !== null)) {
-                  // 向上查找最近的 button 或 clickable 元素
-                  var clickable = svg.closest('button, [role="button"], [class*="upload"], [class*="icon"]');
-                  if (clickable && clickable.offsetParent !== null && uploadBtns.indexOf(clickable) === -1) {
-                    uploadBtns.push(clickable);
-                  }
-                }
-              }
-            }
-
-            // A3: 查找有 upload/Upload 类名的 button
-            if (uploadBtns.length === 0) {
-              for (var k = 0; k < all.length; k++) {
-                var el = all[k];
-                if (el.offsetParent === null) continue;
-                var cls = (el.className && typeof el.className === 'string') ? el.className : '';
-                var tag = el.tagName || '';
-                if ((tag === 'BUTTON' || tag === 'A' || el.getAttribute('role') === 'button') &&
-                    (cls.indexOf('upload') >= 0 || cls.indexOf('Upload') >= 0)) {
-                  uploadBtns.push(el);
-                }
-              }
-            }
-
-            // A4: 在 reference slot 容器内查找 icon/button
-            if (uploadBtns.length === 0) {
-              // 查找包含 "Reference" 标签文本的容器
-              for (var k = 0; k < all.length; k++) {
-                var el = all[k];
-                if (el.offsetParent === null) continue;
-                var txt = (el.textContent || '').trim();
-                if (txt === 'Reference' && el.children.length <= 2) {
-                  // 这是 "Reference" 标签本身，向上找容器
-                  var container = el.parentElement;
-                  if (container) {
-                    // 在容器内找所有 button 或 icon 元素
-                    var btns = container.querySelectorAll('button, [role="button"], [class*="icon"], [class*="btn"]');
-                    for (var j = 0; j < btns.length; j++) {
-                      if (btns[j].offsetParent !== null && uploadBtns.indexOf(btns[j]) === -1) {
-                        uploadBtns.push(btns[j]);
-                      }
-                    }
-                    // 如果容器本身就是 clickable
-                    if (uploadBtns.length === 0 && (container.tagName === 'BUTTON' || container.getAttribute('role') === 'button')) {
-                      uploadBtns.push(container);
-                    }
-                  }
-                }
-              }
-            }
-
-            // A5: 最后一个兜底 — 查找有 "+" 号和 "Reference" 文本的可点击元素
-            if (uploadBtns.length === 0) {
-              for (var k = 0; k < all.length; k++) {
-                var el = all[k];
-                if (el.offsetParent === null) continue;
-                var txt = (el.textContent || '').trim();
-                var tag = el.tagName || '';
-                if ((tag === 'BUTTON' || el.getAttribute('role') === 'button' || el.onclick !== null) &&
-                    el.children.length === 0 &&
-                    (txt === '+' || txt.indexOf('upload') >= 0 || txt.indexOf('Upload') >= 0)) {
-                  uploadBtns.push(el);
-                }
-              }
-            }
-
-            if (uploadBtns.length === 0) return 'NO_BUTTONS:found_0_upload_buttons';
-
-            // "+ References" 按钮 — 如果槽不够用，先点它扩展
-            if (slotIndex >= uploadBtns.length) {
-              var addBtn = null;
-              for (var k = 0; k < all.length; k++) {
-                var el = all[k];
-                if (el.offsetParent === null) continue;
-                var txt = (el.textContent || '').trim();
-                if ((txt.indexOf('+') >= 0 && txt.indexOf('Reference') >= 0) ||
-                    txt === '+ References') {
-                  addBtn = el;
-                  break;
-                }
-              }
-              if (addBtn) {
-                var addRect = addBtn.getBoundingClientRect();
-                addBtn.dispatchEvent(new MouseEvent('click', {
-                  bubbles: true, cancelable: true,
-                  clientX: addRect.left + addRect.width / 2,
-                  clientY: addRect.top + addRect.height / 2,
-                  button: 0,
-                }));
-                addBtn.click();
-                return 'CLICKED_ADD';
-              }
-              // 没有更多槽，复用最后一个
-              slotIndex = uploadBtns.length - 1;
-            }
-
-            var btn = uploadBtns[slotIndex];
-            if (!btn) return 'NO_BUTTON_AT_INDEX';
-
-            // 用 MouseEvent 点击（确保 React 能捕获）
-            var rect = btn.getBoundingClientRect();
-            btn.dispatchEvent(new MouseEvent('click', {
-              bubbles: true, cancelable: true,
-              clientX: rect.left + rect.width / 2,
-              clientY: rect.top + rect.height / 2,
-              button: 0,
-            }));
-            btn.click();
-
-            return 'CLICKED:' + slotIndex + ' tag=' + (btn.tagName || '?');
-          })()
-        `)
-
-        console.log(`[Adapter] Seedance slot ${i} result: ${result}`)
-
-        if (result.startsWith('NO_BUTTONS')) {
-          console.warn(`[Adapter] Seedance: No upload buttons found. Run diagnose to inspect DOM.`)
+      try {
+        if (!wasAttached) {
+          dbg.attach('1.3')
         }
 
-        // 等待上传对话框 / 处理
-        await new Promise((r) => setTimeout(r, 1500))
+        for (let i = 0; i < imagePaths.length; i++) {
+          const filePath = imagePaths[i]
+          console.log(`[Adapter] Seedance ref ${i + 1}/${imagePaths.length}: ${filePath}`)
+
+          // Step 1: 点击对应槽位的上传按钮
+          const clickResult: string = await wc.executeJavaScript(`
+            (function() {
+              var slotIdx = ${i};
+              var uploads = [];
+
+              // 查找所有上传相关的按钮/图标
+              document.querySelectorAll('*').forEach(function(el) {
+                if (el.offsetParent === null) return;
+                var aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                var title = (el.getAttribute('title') || '').toLowerCase();
+                var cls = (typeof el.className === 'string') ? el.className.toLowerCase() : '';
+                var tag = (el.tagName || '');
+
+                // 匹配上传按钮的特征
+                var isUploadBtn =
+                  aria.indexOf('upload') >= 0 ||
+                  aria.indexOf('reference') >= 0 ||
+                  title.indexOf('upload') >= 0 ||
+                  (tag === 'BUTTON' && cls.indexOf('upload') >= 0) ||
+                  (tag === 'BUTTON' && el.querySelector('svg') &&
+                   (el.innerHTML || '').indexOf('arrow') >= 0);
+
+                // 查找 "+ References" 特征
+                var txt = (el.textContent || '').trim();
+                var isAddRef = (txt.indexOf('+') >= 0 && txt.indexOf('Reference') >= 0);
+
+                if (isUploadBtn && uploads.indexOf(el) === -1) uploads.push(el);
+                if (isAddRef && uploads.indexOf(el) === -1) uploads.push(el);
+              });
+
+              // 分离上传按钮和 "+ References"
+              var upBtns = uploads.filter(function(b) {
+                return (b.textContent || '').trim().indexOf('+ References') === -1;
+              });
+              var addBtn = uploads.find(function(b) {
+                return (b.textContent || '').trim().indexOf('+ References') >= 0;
+              });
+
+              if (upBtns.length === 0) return 'NO_UPLOAD_BUTTONS';
+
+              // 如果槽不够，点 "+ References"
+              if (slotIdx >= upBtns.length) {
+                if (addBtn) {
+                  var r = addBtn.getBoundingClientRect();
+                  addBtn.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true, cancelable: true,
+                    clientX: r.left + r.width/2, clientY: r.top + r.height/2, button: 0
+                  }));
+                  addBtn.click();
+                  return 'ADD_REF_CLICKED';
+                }
+                slotIdx = upBtns.length - 1;
+              }
+
+              var btn = upBtns[slotIdx];
+              var r = btn.getBoundingClientRect();
+              btn.dispatchEvent(new MouseEvent('click', {
+                bubbles: true, cancelable: true,
+                clientX: r.left + r.width/2, clientY: r.top + r.height/2, button: 0
+              }));
+              btn.click();
+
+              return 'CLICKED:' + slotIdx + ' tag=' + (btn.tagName || '?');
+            })()
+          `)
+          console.log(`[Adapter] Seedance click: ${clickResult}`)
+
+          // 等待 DOM 更新（如果有新的 file input 出现）
+          await new Promise((r) => setTimeout(r, 800))
+
+          // Step 2: CDP 查找 file input 并注入文件
+          const docResult = await dbg.sendCommand('DOM.getDocument', { depth: 0 })
+          const rootNodeId: number = (docResult as any).root.nodeId
+
+          const queryResult = await dbg.sendCommand('DOM.querySelectorAll', {
+            nodeId: rootNodeId,
+            selector: 'input[type="file"]',
+          })
+          const nodeIds: number[] = (queryResult as any).nodeIds || []
+
+          if (nodeIds.length > 0) {
+            // 使用最后一个 file input（通常是最新激活的参考槽对应的）
+            const targetNodeId = nodeIds[nodeIds.length - 1]
+            await dbg.sendCommand('DOM.setFileInputFiles', {
+              files: [filePath],
+              nodeId: targetNodeId,
+            })
+            console.log(`[Adapter] Seedance CDP: file injected on node ${targetNodeId}`)
+
+            // Step 3: 派发 change 事件
+            await wc.executeJavaScript(`
+              (function() {
+                var inputs = document.querySelectorAll('input[type="file"]');
+                var input = inputs[inputs.length - 1];
+                if (input) {
+                  ['change', 'input'].forEach(function(t) {
+                    input.dispatchEvent(new Event(t, { bubbles: true }));
+                  });
+                }
+              })()
+            `)
+          } else {
+            console.warn(`[Adapter] Seedance: no file input found in DOM after click`)
+          }
+
+          await new Promise((r) => setTimeout(r, 1000))
+        }
+      } catch (err) {
+        console.error('[Adapter] Seedance CDP upload error:', err)
+      } finally {
+        if (!wasAttached && dbg.isAttached()) {
+          try { dbg.detach() } catch { /* ok */ }
+        }
       }
     } else {
       // ── WAN 2.6 / Gen-4: First Video Frame 拖放上传 ──
