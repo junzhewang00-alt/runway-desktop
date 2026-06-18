@@ -50,6 +50,8 @@ export interface IRunwayAdapter {
   /** 注册完成回调和槽位释放回调 */
   setCompletionCallback(cb: (taskId: string, result: GenerationResult) => void): void
   setSlotFreedCallback(cb: () => void): void
+  /** 注册 CDP monitor 阻塞/恢复回调（DevTools 抢占 debugger 时通知） */
+  setMonitorBlockedCallback(cb: (blocked: boolean) => void): void
 }
 
 /** 带超时的 Promise 包装 */
@@ -155,6 +157,9 @@ export class RunwayAdapter implements IRunwayAdapter {
 
   // ── CDP 按需挂载 ──
   private cdpIdleTimer: ReturnType<typeof setTimeout> | null = null
+  // ── Monitor 阻塞状态（DevTools 抢占 debugger）──
+  private monitorBlocked = false
+  private onMonitorBlocked: ((blocked: boolean) => void) | null = null
 
   setBrowserView(bv: BrowserView): void {
     // 先清理旧 BrowserView 的 debugger listener，再切换到新的
@@ -166,7 +171,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     this.pageReady = false
     if (wasActive) {
       this.startPersistentMonitor().catch((err) => {
-        console.log('[Adapter] Failed to restart monitor after BrowserView swap:', err)
+        logger.error('Adapter.Monitor', 'Failed to restart monitor after BrowserView swap', undefined, err instanceof Error ? err : undefined)
       })
     }
   }
@@ -236,6 +241,10 @@ export class RunwayAdapter implements IRunwayAdapter {
 
   setSlotFreedCallback(cb: () => void): void {
     this.onSlotFreed = cb
+  }
+
+  setMonitorBlockedCallback(cb: (blocked: boolean) => void): void {
+    this.onMonitorBlocked = cb
   }
 
   // ── 并发提交：仅提交不等待 ──
@@ -1087,7 +1096,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     if (this.monitorActive) return
     if (!this.browserView) return // BrowserView 已被销毁，无需 monitor
     if (this.monitorStarting) {
-      console.log('[Adapter.Monitor] Startup already in progress, waiting...')
+      logger.info('Adapter.Monitor', 'Startup already in progress, waiting...')
       await this.monitorStarting
       return
     }
@@ -1104,9 +1113,18 @@ export class RunwayAdapter implements IRunwayAdapter {
     const wc = this.getWebContents()
     const dbg = wc.debugger
 
+    // 预先注册 detach 监听器（防止重复注册），确保在 isAttached() 检查之前就绪。
+    // 这样即使 DevTools 抢占 debugger，detach 事件也会触发并回调 _doStartMonitor 重连。
+    dbg.removeListener('detach', this.onDetach)
+    dbg.on('detach', this.onDetach)
+
     if (dbg.isAttached()) {
-      console.log('[Adapter.Monitor] Debugger already attached (possibly DevTools), will retry later')
-      this.reattachMonitor()
+      // DevTools 或其他调试器正在占用 CDP 会话。
+      // 不启用退避重连 —— 只需等待 detach 事件。
+      this.monitorBlocked = true
+      this.monitorActive = false
+      logger.warn('Adapter.Monitor', 'CDP blocked — DevTools or another debugger is holding the session. Monitoring paused until detach.')
+      this.onMonitorBlocked?.(true)
       return
     }
 
@@ -1115,45 +1133,71 @@ export class RunwayAdapter implements IRunwayAdapter {
       await dbg.sendCommand('Network.enable')
       this.monitorActive = true
       this.monitorReconnectAttempts = 0
-      console.log('[Adapter.Monitor] Persistent CDP monitor started')
 
-      // 监听 debugger detach（如 DevTools 打开），尝试自动重连
-      dbg.on('detach', this.onDetach)
+      // 如果之前处于阻塞状态，通知恢复
+      if (this.monitorBlocked) {
+        this.monitorBlocked = false
+        logger.info('Adapter.Monitor', 'CDP monitor restored after unblock')
+        this.onMonitorBlocked?.(false)
+      }
+
+      logger.info('Adapter.Monitor', 'Persistent CDP monitor started')
       // 持久消息处理器
       dbg.on('message', this.persistentMessageHandler)
     } catch (err) {
-      console.log('[Adapter.Monitor] Failed to start CDP monitor:', err)
+      logger.error('Adapter.Monitor', 'Failed to start CDP monitor', undefined, err instanceof Error ? err : undefined)
       this.monitorActive = false
       this.reattachMonitor()
     }
   }
 
   private onDetach = (_event: Electron.Event, reason: string): void => {
-    console.log(`[Adapter.Monitor] CDP detached: ${reason}`)
+    logger.warn('Adapter.Monitor', `CDP detached: ${reason}`)
     this.monitorActive = false
-    this.reattachMonitor()
+
+    if (this.monitorBlocked) {
+      // DevTools 关闭 —— 立即重连，不等待退避
+      this.clearReconnectTimer()
+      this.monitorBlocked = false
+      logger.info('Adapter.Monitor', 'DevTools closed, attempting immediate reconnect')
+      this.onMonitorBlocked?.(false)
+      this._doStartMonitor().catch((err) => {
+        logger.error('Adapter.Monitor', 'Immediate reconnect after unblock failed', undefined, err instanceof Error ? err : undefined)
+        this.reattachMonitor()
+      })
+    } else {
+      // 正常 detach（空闲超时、crash 等）—— 使用退避重连
+      this.reattachMonitor()
+    }
   }
 
   private monitorReconnectTimer: ReturnType<typeof setTimeout> | null = null
   private monitorReconnectAttempts = 0
   private readonly MONITOR_MAX_RECONNECT_ATTEMPTS = 10
 
+  private clearReconnectTimer(): void {
+    if (this.monitorReconnectTimer) {
+      clearTimeout(this.monitorReconnectTimer)
+      this.monitorReconnectTimer = null
+    }
+  }
+
   private reattachMonitor(): void {
     if (this.monitorReconnectTimer) return
     if (this.monitorReconnectAttempts >= this.MONITOR_MAX_RECONNECT_ATTEMPTS) {
-      console.log(`[Adapter.Monitor] Giving up reconnection after ${this.monitorReconnectAttempts} attempts`)
+      logger.error('Adapter.Monitor', `Giving up reconnection after ${this.MONITOR_MAX_RECONNECT_ATTEMPTS} attempts`)
       return
     }
     this.monitorReconnectAttempts++
     const delay = Math.min(5000 * Math.pow(2, this.monitorReconnectAttempts - 1), 60000)
-    console.log(`[Adapter.Monitor] Reconnect attempt ${this.monitorReconnectAttempts}/${this.MONITOR_MAX_RECONNECT_ATTEMPTS} in ${delay / 1000}s...`)
+    logger.warn('Adapter.Monitor', `Reconnect attempt ${this.monitorReconnectAttempts}/${this.MONITOR_MAX_RECONNECT_ATTEMPTS} in ${delay / 1000}s`)
     this.monitorReconnectTimer = setTimeout(async () => {
       this.monitorReconnectTimer = null
       try {
         await this.startPersistentMonitor()
         if (this.monitorActive) {
           this.monitorReconnectAttempts = 0
-          console.log('[Adapter.Monitor] Reconnected')
+          logger.info('Adapter.Monitor', 'Reconnected')
         }
       } catch {
         this.reattachMonitor()
@@ -1163,16 +1207,14 @@ export class RunwayAdapter implements IRunwayAdapter {
 
   stopPersistentMonitor(): void {
     this.cancelCdpDetach()
+    this.clearReconnectTimer()
     this.monitorActive = false
+    this.monitorBlocked = false
     this.monitorStarting = null
     this.monitorReconnectAttempts = 0
-    if (this.monitorReconnectTimer) {
-      clearTimeout(this.monitorReconnectTimer)
-      this.monitorReconnectTimer = null
-    }
     // BrowserView 可能已被 destroy（窗口关闭早于 before-quit）
     if (!this.browserView) {
-      console.log('[Adapter.Monitor] BrowserView already destroyed, skip cleanup')
+      logger.info('Adapter.Monitor', 'BrowserView already destroyed, skip cleanup')
       return
     }
     try {
@@ -1182,7 +1224,7 @@ export class RunwayAdapter implements IRunwayAdapter {
       if (wc.debugger.isAttached()) {
         wc.debugger.detach()
       }
-      console.log('[Adapter.Monitor] Stopped')
+      logger.info('Adapter.Monitor', 'Stopped')
     } catch { /* already detached */ }
   }
 
@@ -1191,7 +1233,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     this.cancelCdpDetach()
     if (!this.monitorActive) {
       this.startPersistentMonitor().catch((err) => {
-        console.log('[Adapter.Monitor] notifyTaskActive start failed:', err)
+        logger.error('Adapter.Monitor', 'notifyTaskActive start failed', undefined, err instanceof Error ? err : undefined)
       })
     }
   }
@@ -1199,11 +1241,11 @@ export class RunwayAdapter implements IRunwayAdapter {
   /** 任务完成时调用：启动 30s CDP detach 倒计时 */
   notifyTaskIdle(): void {
     if (this.cdpIdleTimer) return // 已有定时
-    console.log(`[Adapter.Monitor] Scheduling CDP detach in ${CDP_IDLE_DETACH_MS / 1000}s`)
+    logger.info('Adapter.Monitor', `Scheduling CDP detach in ${CDP_IDLE_DETACH_MS / 1000}s`)
     this.cdpIdleTimer = setTimeout(() => {
       this.cdpIdleTimer = null
       if (this.submittedTasks.size === 0) {
-        console.log('[Adapter.Monitor] Idle timeout, detaching CDP')
+        logger.info('Adapter.Monitor', 'Idle timeout, detaching CDP')
         this._doDetach()
       }
     }, CDP_IDLE_DETACH_MS)
@@ -1213,7 +1255,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     if (this.cdpIdleTimer) {
       clearTimeout(this.cdpIdleTimer)
       this.cdpIdleTimer = null
-      console.log('[Adapter.Monitor] Cancelled idle detach')
+      logger.info('Adapter.Monitor', 'Cancelled idle detach')
     }
   }
 
@@ -1225,7 +1267,7 @@ export class RunwayAdapter implements IRunwayAdapter {
       const wc = this.getWebContents()
       if (wc.debugger.isAttached()) {
         wc.debugger.detach()
-        console.log('[Adapter.Monitor] CDP detached (idle)')
+        logger.info('Adapter.Monitor', 'CDP detached (idle)')
       }
     } catch { /* already detached */ }
   }
@@ -1245,7 +1287,7 @@ export class RunwayAdapter implements IRunwayAdapter {
 
     // ── 信号 1：视频文件直接加载 ──
     if (mimeType.startsWith('video/') || /\.(mp4|webm|mov)(\?|$)/i.test(url)) {
-      console.log('[Adapter.Monitor] Video asset detected:', url)
+      logger.info('Adapter.Monitor', `Video asset detected: ${url}`)
       await this.handleMonitorCompletion(url)
       return
     }
