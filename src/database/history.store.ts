@@ -65,7 +65,7 @@ export class HistoryStore {
     return gen
   }
 
-  list(filter?: { modelId?: string; dateFrom?: number; dateTo?: number }): Generation[] {
+  list(filter?: { modelId?: string; dateFrom?: number; dateTo?: number }, page = 1, pageSize = 50): Generation[] {
     const db = databaseConnection.getDb()
     let sql = 'SELECT * FROM generations WHERE 1=1'
     const params: Record<string, unknown> = {}
@@ -83,7 +83,8 @@ export class HistoryStore {
       params.dateTo = filter.dateTo
     }
 
-    sql += ' ORDER BY created_at DESC LIMIT 500'
+    const offset = Math.max(0, (page - 1)) * Math.max(1, pageSize)
+    sql += ` ORDER BY created_at DESC LIMIT ${Math.max(1, pageSize)} OFFSET ${offset}`
 
     const rows = db.prepare(sql).all(params) as Record<string, unknown>[]
     return rows.map((r) => this.rowToGeneration(r))

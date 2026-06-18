@@ -43,8 +43,8 @@ const api = {
 
   // Sprint 11: History API
   history: {
-    list: (filter?: { modelId?: string; dateFrom?: number; dateTo?: number }) =>
-      ipcRenderer.invoke('history:list', filter),
+    list: (filter?: { modelId?: string; dateFrom?: number; dateTo?: number }, page?: number, pageSize?: number) =>
+      ipcRenderer.invoke('history:list', filter, page, pageSize),
     getById: (id: string) => ipcRenderer.invoke('history:getById', id),
   },
 

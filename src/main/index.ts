@@ -298,7 +298,7 @@ ipcMain.handle('models:list', withIpcTimeout(() => {
 }))
 
 // Sprint 11 - History
-ipcMain.handle('history:list', withIpcTimeout((_event, filter?: { modelId?: string; dateFrom?: number; dateTo?: number }) => {
+ipcMain.handle('history:list', withIpcTimeout((_event, filter?: { modelId?: string; dateFrom?: number; dateTo?: number }, page?: number, pageSize?: number) => {
   if (filter?.modelId && !MODEL_CAPS[filter.modelId]) {
     logger.warn('IPC', `history:list rejected — unknown model: ${filter.modelId}`)
     return []
@@ -311,7 +311,7 @@ ipcMain.handle('history:list', withIpcTimeout((_event, filter?: { modelId?: stri
     logger.warn('IPC', `history:list rejected — invalid dateTo: ${filter.dateTo}`)
     return []
   }
-  return historyStore.list(filter)
+  return historyStore.list(filter, page, pageSize)
 }))
 
 ipcMain.handle('history:getById', withIpcTimeout((_event, id: string) => {
