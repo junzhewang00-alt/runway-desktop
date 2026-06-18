@@ -79,7 +79,16 @@ export class DatabaseConnection implements IDatabaseConnection {
       CREATE INDEX IF NOT EXISTS idx_task_materials_material ON task_materials(material_id);
     `)
 
-    // 对旧数据库添加新列（SQLite 不支持 IF NOT EXISTS for ALTER TABLE，用 try-catch）
+    // 使用 PRAGMA table_info 检查列是否存在，幂等安全
+    const addColumnIfMissing = (table: string, colName: string, colDef: string) => {
+      const existing = this.db
+        .prepare(`PRAGMA table_info(${table})`)
+        .all() as { name: string }[]
+      if (!existing.some((c) => c.name === colName)) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${colName} ${colDef}`)
+      }
+    }
+
     for (const col of [
       { name: 'priority', def: "TEXT NOT NULL DEFAULT 'medium'" },
       { name: 'note', def: "TEXT NOT NULL DEFAULT ''" },
@@ -88,12 +97,7 @@ export class DatabaseConnection implements IDatabaseConnection {
       { name: 'resolution', def: 'TEXT' },
       { name: 'aspect_ratio', def: 'TEXT' },
     ]) {
-      try {
-        this.db.exec(`ALTER TABLE tasks ADD COLUMN ${col.name} ${col.def}`)
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        if (!msg.includes('duplicate column name')) throw e
-      }
+      addColumnIfMissing('tasks', col.name, col.def)
     }
 
     for (const col of [
@@ -101,12 +105,7 @@ export class DatabaseConnection implements IDatabaseConnection {
       { name: 'resolution', def: 'TEXT' },
       { name: 'aspect_ratio', def: 'TEXT' },
     ]) {
-      try {
-        this.db.exec(`ALTER TABLE generations ADD COLUMN ${col.name} ${col.def}`)
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        if (!msg.includes('duplicate column name')) throw e
-      }
+      addColumnIfMissing('generations', col.name, col.def)
     }
   }
 
