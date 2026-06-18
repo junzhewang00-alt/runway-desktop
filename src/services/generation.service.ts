@@ -186,6 +186,8 @@ export class GenerationService implements IGenerationService {
   }
 
   private static readonly MAX_AUTO_RETRIES = 3
+  /** 视频文件保留天数（超过后自动清理） */
+  private static readonly DOWNLOAD_RETENTION_DAYS = 30
 
   /** CDP monitor 回调：处理生成完成结果 */
   handleCompletion(taskId: string, result: { status: string; videoUrl?: string; error?: string }): void {
@@ -240,6 +242,33 @@ export class GenerationService implements IGenerationService {
         new Notification({ title: `生成失败 — ${modelName}`, body: result.error || '未知错误' }).show()
       } catch { /* 通知不可用 */ }
     }
+  }
+
+  /** 清理超过保留期的下载视频文件 */
+  cleanupOldDownloads(): void {
+    try {
+      const downloadsDir = path.join(app.getPath('downloads'), 'runway-desktop')
+      if (!fs.existsSync(downloadsDir)) return
+
+      const cutoff = Date.now() - GenerationService.DOWNLOAD_RETENTION_DAYS * 86400_000
+      const files = fs.readdirSync(downloadsDir)
+      let removed = 0
+
+      for (const file of files) {
+        const filePath = path.join(downloadsDir, file)
+        try {
+          const stat = fs.statSync(filePath)
+          if (stat.mtimeMs < cutoff) {
+            fs.unlinkSync(filePath)
+            removed++
+          }
+        } catch { /* 跳过无法访问的文件 */ }
+      }
+
+      if (removed > 0) {
+        this.logger?.info('Service', `Cleaned ${removed} expired downloads (>${GenerationService.DOWNLOAD_RETENTION_DAYS}d)`)
+      }
+    } catch { /* 清理失败不应影响正常运行 */ }
   }
 }
 

@@ -98,6 +98,9 @@ async function createWindow(): Promise<void> {
 
   logger.info('Main', 'Application started')
 
+  // 启动时清理过期下载文件（异步，不阻塞启动）
+  generationService.cleanupOldDownloads()
+
   // Sprint 8: 日志推送至渲染进程
   logger.addListener((entry) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
