@@ -185,6 +185,8 @@ export class GenerationService implements IGenerationService {
     } catch { /* 文件可能已被删除或未创建 */ }
   }
 
+  private static readonly MAX_AUTO_RETRIES = 3
+
   /** CDP monitor 回调：处理生成完成结果 */
   handleCompletion(taskId: string, result: { status: string; videoUrl?: string; error?: string }): void {
     const task = taskQueue.getById(taskId)
@@ -222,8 +224,15 @@ export class GenerationService implements IGenerationService {
         new Notification({ title: `生成完成 — ${modelName}`, body: promptPreview }).show()
       } catch { /* 通知不可用 */ }
     } else {
-      taskQueue.updateStatus(taskId, 'failed', result.error)
-      this.logger?.error('Service', `Task failed: ${taskId} completedAt=${completedAt} reason=${result.error}`, taskId)
+      // 自动重试：临时故障（Runway 服务端过载等）自动重新入队
+      if (task.retryCount < GenerationService.MAX_AUTO_RETRIES) {
+        taskQueue.updateStatus(taskId, 'pending', result.error)
+        const newCount = task.retryCount + 1
+        this.logger?.warn('Service', `Task failed, auto-retry ${newCount}/${GenerationService.MAX_AUTO_RETRIES}: ${taskId} reason=${result.error}`, taskId)
+      } else {
+        taskQueue.updateStatus(taskId, 'failed', result.error)
+        this.logger?.error('Service', `Task failed (retries exhausted): ${taskId} completedAt=${completedAt} reason=${result.error}`, taskId)
+      }
 
       try {
         const modelCap = MODEL_CAPS[task.modelId]
