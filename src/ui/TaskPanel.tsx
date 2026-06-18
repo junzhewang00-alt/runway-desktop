@@ -485,9 +485,22 @@ const TaskPanel: React.FC = () => {
       {/* 任务列表 */}
       <div style={styles.list}>
         {filteredTasks.length === 0 && (
-          <p style={styles.empty}>
-            {search || statusFilter ? 'No matching tasks' : 'No tasks yet'}
-          </p>
+          <div style={styles.emptyState}>
+            <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{ marginBottom: 'var(--space-4)', opacity: 0.6 }}>
+              <rect x="12" y="6" width="36" height="48" rx="4" stroke="var(--color-accent)" strokeWidth="1.5" fill="var(--color-accent-subtle)"/>
+              <line x1="20" y1="18" x2="40" y2="18" stroke="var(--color-accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
+              <line x1="20" y1="24" x2="36" y2="24" stroke="var(--color-accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
+              <line x1="20" y1="30" x2="32" y2="30" stroke="var(--color-accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
+              <circle cx="38" cy="42" r="12" stroke="var(--color-accent)" strokeWidth="1.2" fill="var(--color-surface)"/>
+              <polyline points="32,42 37,47 45,37" stroke="var(--color-accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+            </svg>
+            <p style={styles.emptyText}>
+              {search || statusFilter ? 'No matching tasks' : 'No tasks yet'}
+            </p>
+            <p style={styles.emptyHint}>
+              {search || statusFilter ? 'Try a different filter' : 'Type a prompt and press Ctrl+Enter to start'}
+            </p>
+          </div>
         )}
         {filteredTasks.map((task) => (
           <div key={task.id} className="task-card" style={styles.taskCard}>
@@ -805,11 +818,24 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: 'auto',
     padding: 'var(--space-3)',
   },
-  empty: {
-    textAlign: 'center',
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 'var(--space-8) var(--space-4)',
+  },
+  emptyText: {
+    fontSize: 'var(--text-md)',
+    fontWeight: 600,
     color: 'var(--color-text-muted)',
-    fontSize: 'var(--text-base)',
-    padding: 24,
+    margin: 0,
+  },
+  emptyHint: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-muted)',
+    marginTop: 'var(--space-2)',
+    opacity: 0.7,
   },
   taskCard: {
     background: 'var(--color-surface)',

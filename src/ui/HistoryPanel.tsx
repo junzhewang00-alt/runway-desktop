@@ -110,7 +110,16 @@ const HistoryPanel: React.FC = () => {
       {/* 历史列表 */}
       <div style={styles.list}>
         {generations.length === 0 && (
-          <p style={styles.empty}>暂无历史记录</p>
+          <div style={styles.emptyState}>
+            <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{ marginBottom: 'var(--space-4)', opacity: 0.6 }}>
+              <circle cx="32" cy="32" r="22" stroke="var(--color-accent)" strokeWidth="1.5" fill="var(--color-accent-subtle)"/>
+              <circle cx="32" cy="32" r="18" stroke="var(--color-accent)" strokeWidth="0.8" opacity="0.3"/>
+              <polyline points="32,18 32,32 42,32" stroke="var(--color-accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <circle cx="32" cy="32" r="3" fill="var(--color-accent)"/>
+            </svg>
+            <p style={styles.emptyText}>暂无历史记录</p>
+            <p style={styles.emptyHint}>完成第一个生成任务后这里会出现记录</p>
+          </div>
         )}
         {generations.map((gen) => (
           <div key={gen.id} className="history-card" style={styles.card}>
@@ -237,11 +246,24 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: 'auto',
     padding: 'var(--space-3)',
   },
-  empty: {
-    textAlign: 'center',
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 'var(--space-8) var(--space-4)',
+  },
+  emptyText: {
+    fontSize: 'var(--text-md)',
+    fontWeight: 600,
     color: 'var(--color-text-muted)',
-    fontSize: 'var(--text-base)',
-    padding: 24,
+    margin: 0,
+  },
+  emptyHint: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-muted)',
+    marginTop: 'var(--space-2)',
+    opacity: 0.7,
   },
   card: {
     background: 'var(--color-surface)',

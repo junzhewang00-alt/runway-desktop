@@ -139,7 +139,18 @@ const QueueStatusPanel: React.FC = () => {
         </div>
         {showLogs && (
           <div ref={scrollRef} style={styles.logList}>
-            {logs.length === 0 && <p style={styles.empty}>等待日志...</p>}
+            {logs.length === 0 && (
+              <div style={styles.emptyState}>
+                <svg width="40" height="40" viewBox="0 0 40 40" fill="none" style={{ marginBottom: 'var(--space-3)', opacity: 0.4 }}>
+                  <rect x="4" y="6" width="32" height="28" rx="3" stroke="var(--color-dark-text-secondary)" strokeWidth="1.2"/>
+                  <line x1="8" y1="14" x2="18" y2="14" stroke="var(--color-dark-text-secondary)" strokeWidth="1" strokeLinecap="round"/>
+                  <line x1="8" y1="20" x2="24" y2="20" stroke="var(--color-dark-text-secondary)" strokeWidth="1" strokeLinecap="round" opacity="0.6"/>
+                  <line x1="8" y1="26" x2="14" y2="26" stroke="var(--color-dark-text-secondary)" strokeWidth="1" strokeLinecap="round" opacity="0.4"/>
+                  <rect x="26" y="30" width="8" height="2" rx="1" fill="var(--color-accent)" opacity="0.5"/>
+                </svg>
+                <p style={styles.emptyText}>等待日志...</p>
+              </div>
+            )}
             {logs.map((entry, i) => (
               <div key={i} style={styles.logEntry}>
                 <span style={styles.logTime}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
@@ -298,11 +309,17 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: 'var(--font-mono)',
     fontSize: '11px',
     lineHeight: 1.5,
+  emptyState: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 'var(--space-6) var(--space-4)',
   },
-  empty: {
+  emptyText: {
+    fontSize: 'var(--text-sm)',
     color: 'var(--color-dark-text-secondary)',
-    textAlign: 'center',
-    padding: 24,
+    margin: 0,
   },
   logEntry: {
     display: 'flex',
