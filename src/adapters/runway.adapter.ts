@@ -1006,81 +1006,105 @@ export class RunwayAdapter implements IRunwayAdapter {
       taskId,
     )
 
+    const SUBMIT_TOTAL_TIMEOUT_MS = 120_000
+
     try {
-      if (!this.monitorActive) {
-        console.log('[Adapter] CDP monitor not active, attempting restart...')
-        await this.startPersistentMonitor()
-        if (!this.monitorActive) {
-          throw new Error('CDP monitor unavailable — cannot track generation completion')
-        }
-      }
-
-      await this.acquireLockForTask(taskId)
-      try {
-        const wc = this.getWebContents()
-
-        // 1. 页面初始化（仅首次或 BrowserView 重建后）
-        if (!this.pageReady) {
-          console.log('[Adapter] Page not ready, running resetPage...')
-          await this.resetPage()
-          this.pageReady = true
-        }
-
-        // 2. 模型切换（仅在模型变化时）
-        if (this.currentModel !== modelId) {
-          console.log(`[Adapter] Switching model: ${this.currentModel || 'none'} → ${modelId}`)
-          await this.selectModel(modelId)
-          this.currentModel = modelId
-        }
-
-        // 3. 配置视频参数（时长/分辨率/比例）
-        if (duration !== undefined) {
-          await this.selectDuration(duration)
-        }
-        if (resolution !== undefined) {
-          await this.selectResolution(resolution)
-        }
-        if (aspectRatio !== undefined) {
-          await this.selectAspectRatio(aspectRatio)
-        }
-
-        // 4. 填充提示词（先于图片上传，避免图片上传后 DOM 状态变化干扰）
-        await this.fillPrompt(prompt)
-        console.log('[Adapter] submitOnly: fillPrompt done, calling uploadRefs...')
-
-        // 5. 上传参考图（如有）
-        if (imagePaths && imagePaths.length > 0) {
-          await this.uploadReferenceImages(imagePaths, modelId)
-        }
-
-        // 6. 点击生成（内部含 session 配置逻辑）
-        await this.clickGenerate()
-
-        // 重置页面状态，下一个任务会在 resetPage 中 reload 页面
-        // Runway 的生成是服务端的，reload 不会取消已提交的生成
-        this.pageReady = false
-        this.currentModel = ''
-
-        // 记录提交到 CDP monitor 的匹配队列
-        this.submittedTasks.set(taskId, { slot: assignedSlot, submittedAt: Date.now() })
-        logger.info(
-          'Adapter.Slot',
-          `Task submitted on slot ${assignedSlot} — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
-          taskId,
-        )
-      } finally {
-        this.releaseLockForTask(taskId)
-      }
+      await Promise.race([
+        this._doSubmit(taskId, modelId, prompt, imagePaths, duration, resolution, aspectRatio, assignedSlot),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`submitOnly total timeout (${SUBMIT_TOTAL_TIMEOUT_MS / 1000}s)`)), SUBMIT_TOTAL_TIMEOUT_MS),
+        ),
+      ])
     } catch (err) {
-      // 提交失败，释放槽位
+      // 提交失败或超时，释放槽位与锁
+      try {
+        this.releaseLockForTask(taskId)
+      } catch { /* lock may already be released */ }
       this.slotOccupied[assignedSlot] = false
       this.runwaySlots = Math.max(0, this.runwaySlots - 1)
       logger.warn(
         'Adapter.Slot',
-        `Slot ${assignedSlot} released (submission failed) — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
+        `Slot ${assignedSlot} released (submission failed/timed out) — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
         taskId,
       )
       throw err
+    }
+  }
+
+  /** submitOnly 核心逻辑：不含总超时包装，由 submitOnly 通过 Promise.race 调用 */
+  private async _doSubmit(
+    taskId: string,
+    modelId: string,
+    prompt: string,
+    imagePaths: string[] | undefined,
+    duration: number | undefined,
+    resolution: string | undefined,
+    aspectRatio: string | undefined,
+    assignedSlot: number,
+  ): Promise<void> {
+    if (!this.monitorActive) {
+      console.log('[Adapter] CDP monitor not active, attempting restart...')
+      await this.startPersistentMonitor()
+      if (!this.monitorActive) {
+        throw new Error('CDP monitor unavailable — cannot track generation completion')
+      }
+    }
+
+    await this.acquireLockForTask(taskId)
+    try {
+      const wc = this.getWebContents()
+
+      // 1. 页面初始化（仅首次或 BrowserView 重建后）
+      if (!this.pageReady) {
+        console.log('[Adapter] Page not ready, running resetPage...')
+        await this.resetPage()
+        this.pageReady = true
+      }
+
+      // 2. 模型切换（仅在模型变化时）
+      if (this.currentModel !== modelId) {
+        console.log(`[Adapter] Switching model: ${this.currentModel || 'none'} → ${modelId}`)
+        await this.selectModel(modelId)
+        this.currentModel = modelId
+      }
+
+      // 3. 配置视频参数（时长/分辨率/比例）
+      if (duration !== undefined) {
+        await this.selectDuration(duration)
+      }
+      if (resolution !== undefined) {
+        await this.selectResolution(resolution)
+      }
+      if (aspectRatio !== undefined) {
+        await this.selectAspectRatio(aspectRatio)
+      }
+
+      // 4. 填充提示词（先于图片上传，避免图片上传后 DOM 状态变化干扰）
+      await this.fillPrompt(prompt)
+      console.log('[Adapter] submitOnly: fillPrompt done, calling uploadRefs...')
+
+      // 5. 上传参考图（如有）
+      if (imagePaths && imagePaths.length > 0) {
+        await this.uploadReferenceImages(imagePaths, modelId)
+      }
+
+      // 6. 点击生成（内部含 session 配置逻辑）
+      await this.clickGenerate()
+
+      // 重置页面状态，下一个任务会在 resetPage 中 reload 页面
+      // Runway 的生成是服务端的，reload 不会取消已提交的生成
+      this.pageReady = false
+      this.currentModel = ''
+
+      // 记录提交到 CDP monitor 的匹配队列
+      this.submittedTasks.set(taskId, { slot: assignedSlot, submittedAt: Date.now() })
+      logger.info(
+        'Adapter.Slot',
+        `Task submitted on slot ${assignedSlot} — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
+        taskId,
+      )
+    } finally {
+      this.releaseLockForTask(taskId)
     }
   }
 
