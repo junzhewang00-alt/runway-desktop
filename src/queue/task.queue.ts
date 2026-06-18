@@ -3,6 +3,7 @@ import { databaseConnection } from '../database/connection'
 import { materialStore } from '../database/material.store'
 import type { Task, TaskStatus, TaskPriority, CreateTaskParams } from '../types/tasks'
 import { runwayAdapter } from '../adapters/runway.adapter'
+import { logger } from '../logs/logger'
 
 export type TaskProcessor = (taskId: string) => Promise<void>
 
@@ -140,7 +141,18 @@ export class TaskQueue {
 
   start(): void {
     if (this.running) return
+
+    // 1. 恢复槽位状态（必须在 markOrphanedRunningTasks 之前，否则 running 任务已被标记为 failed）
+    const db = databaseConnection.getDb()
+    const row = db.prepare(
+      `SELECT COUNT(*) as count FROM tasks WHERE status = 'running'`,
+    ).get() as { count: number } | undefined
+    const runningCount = row?.count ?? 0
+    runwayAdapter.restoreSlotState(runningCount)
+
+    // 2. 标记上次会话遗留的 running 任务为 failed
     this.markOrphanedRunningTasks()
+
     this.running = true
     this.workerLoop()
   }

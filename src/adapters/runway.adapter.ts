@@ -10,6 +10,7 @@ import {
   clickValueChipByTextJS,
 } from './runway.selectors'
 import { MODEL_CAPS } from '../types/models'
+import { logger } from '../logs/logger'
 
 export type GenerationStatus = 'idle' | 'generating' | 'completed' | 'failed'
 
@@ -196,6 +197,37 @@ export class RunwayAdapter implements IRunwayAdapter {
 
   hasSlot(): boolean {
     return this.runwaySlots < this.MAX_SLOTS
+  }
+
+  /**
+   * 从数据库恢复槽位状态（进程重启后调用）。
+   *
+   * 必须在 TaskQueue.markOrphanedRunningTasks() 之前调用，
+   * 否则 running 任务被标记为 failed 后计数会归零。
+   *
+   * 恢复后 RunwayAdapter 认为槽位仍被占用，防止新提交超出
+   * Runway 服务端并发限制（仍在处理的上次会话提交任务）。
+   */
+  restoreSlotState(runningCount: number): void {
+    if (runningCount <= 0) {
+      logger.info('Adapter.Slot', 'No orphaned running tasks — slots start at 0')
+      return
+    }
+
+    const previousSlots = this.runwaySlots
+    const count = Math.min(runningCount, this.MAX_SLOTS)
+    this.runwaySlots = count
+
+    // 标记前 count 个槽位为已占用
+    for (let i = 0; i < this.MAX_SLOTS; i++) {
+      this.slotOccupied[i] = i < count
+    }
+
+    logger.warn(
+      'Adapter.Slot',
+      `Restored slot state from DB: ${count}/${this.MAX_SLOTS} slots occupied ` +
+        `(was ${previousSlots}/${this.MAX_SLOTS}, ${runningCount} orphaned running tasks found)`,
+    )
   }
 
   setCompletionCallback(cb: (taskId: string, result: GenerationResult) => void): void {
@@ -959,7 +991,11 @@ export class RunwayAdapter implements IRunwayAdapter {
     }
     this.slotOccupied[assignedSlot] = true
     this.runwaySlots++
-    console.log(`[Adapter] Task ${taskId.slice(0, 8)} assigned slot ${assignedSlot} — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`)
+    logger.info(
+      'Adapter.Slot',
+      `Slot ${assignedSlot} acquired — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
+      taskId,
+    )
 
     try {
       if (!this.monitorActive) {
@@ -1018,7 +1054,11 @@ export class RunwayAdapter implements IRunwayAdapter {
 
         // 记录提交到 CDP monitor 的匹配队列
         this.submittedTasks.set(taskId, { slot: assignedSlot, submittedAt: Date.now() })
-        console.log(`[Adapter] Task ${taskId.slice(0, 8)} submitted on slot ${assignedSlot} — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`)
+        logger.info(
+          'Adapter.Slot',
+          `Task submitted on slot ${assignedSlot} — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
+          taskId,
+        )
       } finally {
         this.releaseLockForTask(taskId)
       }
@@ -1026,7 +1066,11 @@ export class RunwayAdapter implements IRunwayAdapter {
       // 提交失败，释放槽位
       this.slotOccupied[assignedSlot] = false
       this.runwaySlots = Math.max(0, this.runwaySlots - 1)
-      console.log(`[Adapter] Task ${taskId.slice(0, 8)} submission failed, slot ${assignedSlot} released — slots: ${this.runwaySlots}/${this.MAX_SLOTS}`)
+      logger.warn(
+        'Adapter.Slot',
+        `Slot ${assignedSlot} released (submission failed) — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
+        taskId,
+      )
       throw err
     }
   }
@@ -1243,6 +1287,11 @@ export class RunwayAdapter implements IRunwayAdapter {
   /** 处理 monitor 检测到的完成事件：按槽位匹配已提交的任务 */
   private async handleMonitorCompletion(videoUrl?: string): Promise<void> {
     if (this.submittedTasks.size === 0) {
+      // 没有活跃任务但有槽位被占用 → 说明槽位是进程重启后从 DB 恢复的，
+      // 此次完成事件对应上次会话提交的遗留任务。释放一个槽位。
+      if (this.runwaySlots > 0) {
+        this.freeOrphanedSlot('completed')
+      }
       console.log('[Adapter.Monitor] Completion detected but no active tasks')
       return
     }
@@ -1264,7 +1313,11 @@ export class RunwayAdapter implements IRunwayAdapter {
     this.submittedTasks.delete(taskId)
     this.slotOccupied[entry.slot] = false
     this.runwaySlots = Math.max(0, this.runwaySlots - 1)
-    console.log(`[Adapter.Monitor] Task ${taskId.slice(0, 8)} completed on slot ${entry.slot} — slots: ${this.runwaySlots}/${this.MAX_SLOTS}`)
+    logger.info(
+      'Adapter.Slot',
+      `Slot ${entry.slot} freed (completed) — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
+      taskId,
+    )
 
     if (this.onComplete) {
       this.onComplete(taskId, { status: 'completed', videoUrl })
@@ -1277,7 +1330,14 @@ export class RunwayAdapter implements IRunwayAdapter {
   private lastFailureTime = 0
 
   private async handleMonitorFailure(errorMsg: unknown): Promise<void> {
-    if (this.submittedTasks.size === 0) return
+    if (this.submittedTasks.size === 0) {
+      // 没有活跃任务但有槽位被占用 → 说明槽位是进程重启后从 DB 恢复的，
+      // 此次失败事件对应上次会话提交的遗留任务。释放一个槽位。
+      if (this.runwaySlots > 0) {
+        this.freeOrphanedSlot('failed')
+      }
+      return
+    }
     const now = Date.now()
     if (now - this.lastFailureTime < 3000) {
       console.log('[Adapter.Monitor] Skipping duplicate failure event (within cooldown)')
@@ -1292,13 +1352,48 @@ export class RunwayAdapter implements IRunwayAdapter {
     this.submittedTasks.delete(taskId)
     this.slotOccupied[entry.slot] = false
     this.runwaySlots = Math.max(0, this.runwaySlots - 1)
-    console.log(`[Adapter.Monitor] Task ${taskId.slice(0, 8)} failed on slot ${entry.slot} — slots: ${this.runwaySlots}/${this.MAX_SLOTS}`)
+    logger.error(
+      'Adapter.Slot',
+      `Slot ${entry.slot} freed (failed) — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
+      taskId,
+    )
 
     if (this.onComplete) {
       this.onComplete(taskId, { status: 'failed', error: String(errorMsg) })
     }
     if (this.onSlotFreed) {
       this.onSlotFreed()
+    }
+  }
+
+  /**
+   * 释放一个从 DB 恢复的孤儿槽位（无对应 submittedTasks 条目）。
+   * 进程重启后 CDP monitor 检测到上次会话的遗留任务完成/失败时调用。
+   */
+  private freeOrphanedSlot(reason: 'completed' | 'failed'): void {
+    // 找到第一个被占用的槽位并释放
+    for (let i = 0; i < this.MAX_SLOTS; i++) {
+      if (this.slotOccupied[i]) {
+        this.slotOccupied[i] = false
+        this.runwaySlots = Math.max(0, this.runwaySlots - 1)
+        logger.info(
+          'Adapter.Slot',
+          `Orphaned slot ${i} freed (${reason}) — Runway slots: ${this.runwaySlots}/${this.MAX_SLOTS}`,
+        )
+        if (this.onSlotFreed) {
+          this.onSlotFreed()
+        }
+        return
+      }
+    }
+    // 防御：slotOccupied 都为 false 但 runwaySlots > 0（数据不一致）
+    if (this.runwaySlots > 0) {
+      logger.warn(
+        'Adapter.Slot',
+        `Inconsistent slot state: runwaySlots=${this.runwaySlots} but all slotOccupied are false — resetting`,
+      )
+      this.runwaySlots = 0
+      this.slotOccupied = [false, false]
     }
   }
 
