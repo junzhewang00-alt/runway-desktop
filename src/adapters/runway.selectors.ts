@@ -36,6 +36,26 @@ export const RUNWAY_SELECTORS = {
   seedanceAddReference: '[class*="add"], [class*="Add"]',
 } as const
 
+// ── Runway 团队配置 ──
+
+/** Runway 团队 slug — 从环境变量 RUNWAY_TEAM 读取，默认 'junzhewang00'（向后兼容） */
+export function getRunwayTeamSlug(): string {
+  return process.env['RUNWAY_TEAM'] || 'junzhewang00'
+}
+
+/** 构建 Runway 生成页面完整 URL。extraParams 会追加为查询参数。 */
+export function getRunwayURL(extraParams?: Record<string, string>): string {
+  const teamSlug = getRunwayTeamSlug()
+  const base = `https://app.runwayml.com/video-tools/teams/${teamSlug}/ai-tools/generate?mode=tools&tool=video`
+  if (!extraParams || Object.keys(extraParams).length === 0) {
+    return base
+  }
+  const extra = Object.entries(extraParams)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&')
+  return `${base}&${extra}`
+}
+
 /** Adapter 操作超时（毫秒） */
 export const ADAPTER_TIMEOUT = 30_000
 

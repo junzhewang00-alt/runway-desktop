@@ -1,6 +1,8 @@
 import { BrowserView, BrowserWindow } from 'electron'
 import path from 'path'
 import type { SessionManager } from './session.manager'
+import { getRunwayURL, getRunwayTeamSlug } from '../adapters/runway.selectors'
+import { logger } from '../logs/logger'
 
 export interface IBrowserManager {
   loadURL(url: string): Promise<void>
@@ -21,7 +23,9 @@ export class BrowserManager implements IBrowserManager {
   private savedBounds: { x: number; y: number; width: number; height: number } | null = null
   private onHostClosed: (() => void) | null = null
 
-  static readonly RUNWAY_URL = 'https://app.runwayml.com/video-tools/teams/junzhewang00/ai-tools/generate?mode=tools&tool=video&newSession=true'
+  static get RUNWAY_URL(): string {
+    return getRunwayURL({ newSession: 'true' })
+  }
 
   /** 注入 SessionManager（Sprint 3：依赖注入） */
   setSessionManager(sm: SessionManager): void {

@@ -4,6 +4,7 @@ import {
   ADAPTER_TIMEOUT,
   POLL_INTERVAL,
   MAX_WAIT_TIME,
+  getRunwayURL,
   clickOptionByTextJS,
   clickSettingByLabelJS,
   clickValueChipByTextJS,
@@ -1399,9 +1400,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     const currentUrl = wc.getURL()
     if (!currentUrl || currentUrl === 'about:blank') {
       try {
-        await wc.loadURL(
-          'https://app.runwayml.com/video-tools/teams/junzhewang00/ai-tools/generate?mode=tools&tool=video',
-        )
+        await wc.loadURL(getRunwayURL())
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg.includes('ERR_ABORTED')) {
