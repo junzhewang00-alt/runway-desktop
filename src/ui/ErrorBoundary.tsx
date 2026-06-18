@@ -32,23 +32,23 @@ export default class ErrorBoundary extends Component<Props, State> {
             justifyContent: 'center',
             height: '100%',
             padding: '20px',
-            color: '#d9534f',
-            background: '#fff5f5',
+            color: 'var(--color-danger)',
+            background: 'var(--color-danger-bg)',
             textAlign: 'center',
           }}
         >
           <p style={{ fontWeight: 600, marginBottom: 8 }}>
             {this.props.panelName} Crashed
           </p>
-          <p style={{ fontSize: 12, color: '#999', marginBottom: 16, maxWidth: 250 }}>
+          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', marginBottom: 16, maxWidth: 250 }}>
             {this.state.error?.message}
           </p>
           <button
             onClick={this.handleRetry}
             style={{
               padding: '6px 16px',
-              background: '#0078d4',
-              color: '#fff',
+              background: 'var(--color-accent)',
+              color: 'var(--color-text-inverse)',
               border: 'none',
               borderRadius: 4,
               cursor: 'pointer',

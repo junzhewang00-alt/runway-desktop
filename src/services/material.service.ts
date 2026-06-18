@@ -65,7 +65,9 @@ export class MaterialService implements IMaterialService {
 
   getPath(id: string): string | null {
     const mat = materialStore.getById(id)
-    return mat?.filePath ?? null
+    if (!mat?.filePath) return null
+    if (!fs.existsSync(mat.filePath)) return null
+    return mat.filePath
   }
 }
 
