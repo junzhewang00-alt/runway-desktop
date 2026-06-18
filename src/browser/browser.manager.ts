@@ -20,7 +20,6 @@ export class BrowserManager implements IBrowserManager {
   private initialBounds: { x: number; y: number; width: number; height: number } | undefined
   private onRebuild: ((bv: BrowserView) => void) | null = null
   private destroying = false
-  private savedBounds: { x: number; y: number; width: number; height: number } | null = null
   private onHostClosed: (() => void) | null = null
 
   static get RUNWAY_URL(): string {
@@ -127,18 +126,16 @@ export class BrowserManager implements IBrowserManager {
     this.browserView.setBounds({ x, y, width, height })
   }
 
-  /** 临时隐藏 BrowserView（模态框遮挡时使用） */
+  /** 弹窗打开时降低 BrowserView 层级（替代 bounds 隐藏，避免闪烁和永久隐藏风险） */
   hide(): void {
-    if (!this.browserView) return
-    this.savedBounds = this.browserView.getBounds()
-    this.browserView.setBounds({ x: 0, y: 0, width: 0, height: 0 })
+    if (!this.browserView || !this.hostWindow) return
+    try { this.hostWindow.setTopBrowserView(null as unknown as BrowserView) } catch { /* 某些 Electron 版本不支持 */ }
   }
 
-  /** 恢复 BrowserView 显示 */
+  /** 弹窗关闭时恢复 BrowserView 层级 */
   show(): void {
-    if (!this.browserView || !this.savedBounds) return
-    this.browserView.setBounds(this.savedBounds)
-    this.savedBounds = null
+    if (!this.browserView || !this.hostWindow) return
+    try { this.hostWindow.setTopBrowserView(this.browserView) } catch { /* fallback */ }
   }
 
   destroy(): void {
