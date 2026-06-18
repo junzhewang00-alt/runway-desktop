@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 const api = {
   // Sprint 5: Queue API
   queue: {
-    create: (params: { prompt: string; modelId: string; priority?: string; note?: string; materialIds?: string[] }) =>
+    create: (params: { prompt: string; modelId: string; priority?: string; note?: string; materialIds?: string[]; duration?: number; resolution?: string; aspectRatio?: string }) =>
       ipcRenderer.invoke('queue:create', params),
     list: (status?: string) => ipcRenderer.invoke('queue:list', status),
     updateStatus: (id: string, status: string, error?: string) =>
@@ -26,6 +26,8 @@ const api = {
     openDevTools: () => ipcRenderer.invoke('browser:openDevTools'),
     updateBounds: (rect: { x: number; y: number; width: number; height: number }) =>
       ipcRenderer.invoke('browser:updateBounds', rect),
+    hide: () => ipcRenderer.invoke('browser:hide'),
+    show: () => ipcRenderer.invoke('browser:show'),
   },
 
   // Sprint 3: Session API
@@ -54,6 +56,25 @@ const api = {
   // Debug
   debug: {
     diagnose: () => ipcRenderer.invoke('debug:diagnose'),
+  },
+
+  // Sprint 14: Shortcuts
+  shortcuts: {
+    onFocusPrompt: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('shortcut:focus-prompt', handler)
+      return () => ipcRenderer.removeListener('shortcut:focus-prompt', handler)
+    },
+    onRefreshBrowser: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('shortcut:refresh-browser', handler)
+      return () => ipcRenderer.removeListener('shortcut:refresh-browser', handler)
+    },
+    onExportLogs: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('shortcut:export-logs', handler)
+      return () => ipcRenderer.removeListener('shortcut:export-logs', handler)
+    },
   },
 
   // Material

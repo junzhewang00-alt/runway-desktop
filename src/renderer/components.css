@@ -1,0 +1,96 @@
+/* ── Component hover/active states — Glass Morphism ── */
+
+/* Task card hover — glass lift */
+.task-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg) !important;
+  border-color: var(--color-accent-border) !important;
+}
+
+.task-card:hover .task-delete-btn {
+  opacity: 1 !important;
+}
+
+/* History card hover */
+.history-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg) !important;
+  border-color: var(--color-border-strong) !important;
+}
+
+.history-card:hover .history-card-header {
+  background: var(--color-surface-hover);
+}
+
+/* Material card hover */
+.material-card:hover {
+  transform: scale(1.05) translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.material-card:hover .material-delete-btn {
+  opacity: 1 !important;
+}
+
+/* Add reference button hover */
+.ref-add-btn:hover {
+  border-color: var(--color-accent) !important;
+  color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+}
+
+/* Tab hover — warm underline */
+.tab-btn:hover {
+  color: var(--color-accent) !important;
+}
+
+/* Divider hover */
+.divider:hover {
+  background: var(--color-accent) !important;
+}
+
+/* Select hover */
+select:hover {
+  border-color: var(--color-border-strong) !important;
+}
+
+/* Primary button hover */
+.btn-primary:hover {
+  background: var(--color-accent-hover) !important;
+  box-shadow: 0 2px 8px rgba(199, 125, 90, 0.2);
+}
+
+.btn-primary:active {
+  background: var(--color-accent-pressed) !important;
+  transform: scale(0.97);
+}
+
+/* Log entry hover */
+.log-entry:hover {
+  background: var(--color-dark-surface);
+}
+
+/* ── Material Picker ── */
+
+.material-picker-card:hover {
+  transform: scale(1.05) translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.material-picker-card.selected {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 2px var(--color-accent-subtle);
+}
+
+/* Pick "素材库" button in ReferenceImageBar */
+.ref-picker-btn:hover {
+  border-color: var(--color-accent) !important;
+  color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+}
+
+/* MaterialPicker drop zone drag-over */
+.material-picker-drop-zone.drag-over {
+  border-color: var(--color-accent) !important;
+  background: var(--color-accent-subtle) !important;
+}

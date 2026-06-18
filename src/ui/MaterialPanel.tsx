@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Material } from '../types/materials'
 
 const MaterialPanel: React.FC = () => {
@@ -102,7 +102,7 @@ const MaterialPanel: React.FC = () => {
       <div
         style={{
           ...styles.grid,
-          borderColor: dragOver ? '#0078d4' : 'transparent',
+          borderColor: dragOver ? 'var(--color-accent)' : 'transparent',
         }}
       >
         {materials.length === 0 && (
@@ -124,9 +124,9 @@ const MaterialPanel: React.FC = () => {
                   : [mat.id]
 
                 // 校验数量上限
-                if (ids.length > 5) {
+                if (ids.length > 9) {
                   e.preventDefault()
-                  alert('单次最多拖拽 5 张参考图')
+                  alert('单次最多拖拽 9 张参考图')
                   return
                 }
 
@@ -161,9 +161,10 @@ const MaterialPanel: React.FC = () => {
               }}
               onClick={(e) => handleSelect(mat.id, e)}
               title={mat.fileName}
+              className="material-card"
               style={{
                 ...styles.card,
-                borderColor: isSelected ? '#0078d4' : '#e0e0e0',
+                borderColor: isSelected ? 'var(--color-accent)' : 'var(--color-border-light)',
               }}
             >
               <img
@@ -172,6 +173,7 @@ const MaterialPanel: React.FC = () => {
                 style={styles.thumbnail}
               />
               <button
+                className="material-delete-btn"
                 onClick={(e) => handleDelete(mat.id, e)}
                 style={styles.deleteBtn}
               >
@@ -190,58 +192,59 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
-    background: '#f5f5f5',
+    background: 'var(--color-surface)',
   },
   toolbar: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '8px 12px',
-    background: '#e8e8e8',
-    borderBottom: '1px solid #ddd',
+    padding: 'var(--space-3) var(--space-4)',
+    background: 'var(--color-header-bg)',
+    borderBottom: '1px solid var(--color-border)',
   },
   importBtn: {
     padding: '6px 14px',
-    background: '#0078d4',
-    color: '#fff',
+    background: 'var(--color-accent)',
+    color: 'var(--color-text-inverse)',
     border: 'none',
-    borderRadius: 4,
+    borderRadius: 'var(--radius-md)',
     cursor: 'pointer',
-    fontSize: 12,
+    fontSize: 'var(--text-sm)',
     fontWeight: 500,
   },
   selectedCount: {
-    fontSize: 11,
-    color: '#666',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-secondary)',
   },
   grid: {
     flex: 1,
     overflowY: 'auto',
     display: 'flex',
     flexWrap: 'wrap',
-    gap: '8px',
-    padding: '8px',
+    gap: 'var(--space-3)',
+    padding: 'var(--space-3)',
     alignContent: 'flex-start',
     border: '2px solid transparent',
-    transition: 'border-color 0.2s',
+    transition: 'border-color var(--transition-base)',
   },
   empty: {
     width: '100%',
     textAlign: 'center',
-    color: '#999',
-    fontSize: 13,
+    color: 'var(--color-text-muted)',
+    fontSize: 'var(--text-base)',
     padding: 40,
   },
   card: {
     position: 'relative',
     width: 100,
     height: 100,
-    borderRadius: 4,
+    borderRadius: 'var(--radius-md)',
     border: '2px solid',
     overflow: 'hidden',
     cursor: 'pointer',
-    background: '#fff',
+    background: 'var(--color-bg)',
     flexShrink: 0,
+    transition: 'transform var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast)',
   },
   thumbnail: {
     width: '100%',
@@ -250,11 +253,11 @@ const styles: Record<string, React.CSSProperties> = {
   },
   deleteBtn: {
     position: 'absolute',
-    top: 2,
-    right: 2,
+    top: 3,
+    right: 3,
     width: 20,
     height: 20,
-    background: 'rgba(217, 83, 79, 0.85)',
+    background: 'rgba(196, 85, 77, 0.88)',
     color: '#fff',
     border: 'none',
     borderRadius: '50%',

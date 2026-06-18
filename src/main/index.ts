@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, net, protocol } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, net, protocol, Menu } from 'electron'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { browserManager, BrowserManager } from '../browser/browser.manager'
@@ -13,6 +13,7 @@ import { materialStore } from '../database/material.store'
 import { materialService } from '../services/material.service'
 import { databaseConnection } from '../database/connection'
 import type { TaskStatus } from '../types/tasks'
+import { registerShortcuts, unregisterShortcuts } from './shortcuts'
 
 const isDev = !app.isPackaged
 
@@ -38,7 +39,7 @@ async function createWindow(): Promise<void> {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: 'Runway Desktop Client',
+    title: 'Canvas',
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -107,7 +108,7 @@ async function createWindow(): Promise<void> {
     // electron-vite 通过环境变量注入正确的 dev server URL
     const devURL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173'
     mainWindow.loadURL(devURL)
-    // DevTools 手动 Ctrl+Shift+I 打开，不自动弹出遮挡右侧 LogPanel
+    // DevTools 手动 Ctrl+Shift+I 打开，不自动弹出遮挡右侧面板
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'))
   }
@@ -135,6 +136,14 @@ ipcMain.handle(
   }),
 )
 
+ipcMain.handle('browser:hide', withIpcTimeout(() => {
+  browserManager.hide()
+}))
+
+ipcMain.handle('browser:show', withIpcTimeout(() => {
+  browserManager.show()
+}))
+
 // Sprint 3 - Session
 ipcMain.handle('session:isLoggedIn', withIpcTimeout(async () => {
   return sessionManager.isLoggedIn()
@@ -145,7 +154,7 @@ ipcMain.handle('session:clear', withIpcTimeout(async () => {
 }))
 
 // Sprint 5 - Queue
-ipcMain.handle('queue:create', withIpcTimeout((_event, params: { prompt: string; modelId: string; priority?: string; note?: string; materialIds?: string[] }) => {
+ipcMain.handle('queue:create', withIpcTimeout((_event, params: { prompt: string; modelId: string; priority?: string; note?: string; materialIds?: string[]; duration?: number; resolution?: string; aspectRatio?: string }) => {
   return taskQueue.create(params)
 }))
 
@@ -218,6 +227,9 @@ ipcMain.handle('debug:diagnose', withIpcTimeout(async () => {
 }))
 
 app.whenReady().then(() => {
+  // 移除默认菜单栏
+  Menu.setApplicationMenu(null)
+
   // 素材库自定义协议 — 在 createWindow 之前注册（session 要求 ready 后）
   protocol.handle('material-file', (request) => {
     const id = new URL(request.url).hostname
@@ -227,6 +239,7 @@ app.whenReady().then(() => {
   })
 
   createWindow()
+  registerShortcuts(mainWindow!)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -236,9 +249,14 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
-  taskQueue.stop()
-  runwayAdapter.stopPersistentMonitor()
-  databaseConnection.close()
+  try {
+    unregisterShortcuts()
+    taskQueue.stop()
+    runwayAdapter.stopPersistentMonitor()
+    databaseConnection.close()
+  } catch (err) {
+    console.error('[Main] Error during shutdown:', err)
+  }
 })
 
 app.on('window-all-closed', () => {

@@ -1,6 +1,9 @@
-import React, { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import type { Task, TaskStatus, TaskPriority } from '../types/tasks'
+import { MODEL_CAPS } from '../types/models'
+import type { ModelCapability } from '../types/models'
 import ReferenceImageBar from './ReferenceImageBar'
+import MaterialPicker from './MaterialPicker'
 import type { Material } from '../types/materials'
 
 const STATUS_LABELS: TaskStatus[] = ['pending', 'running', 'completed', 'failed']
@@ -19,20 +22,27 @@ const priorityLabelMap: Record<TaskPriority, string> = {
 }
 
 const priorityColor: Record<TaskPriority, string> = {
-  high: '#d9534f',
-  medium: '#f0ad4e',
-  low: '#999',
+  high: 'var(--color-danger)',
+  medium: 'var(--color-warning)',
+  low: 'var(--color-text-muted)',
 }
 
 const TaskPanel: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([])
   const [prompt, setPrompt] = useState('')
-  const [modelId, setModelId] = useState('wan-2.6')
-  const [models, setModels] = useState<{ id: string; name: string }[]>([])
+  const [modelId, setModelId] = useState('gen-4.5')
+  const [models, setModels] = useState<ModelCapability[]>([])
   const [priority, setPriority] = useState<TaskPriority>('medium')
   const [note, setNote] = useState('')
   const [referenceImages, setReferenceImages] = useState<Material[]>([])
+  const [showMaterialPicker, setShowMaterialPicker] = useState(false)
   const [dragOverInput, setDragOverInput] = useState(false)
+  const promptRef = useRef<HTMLTextAreaElement>(null)
+
+  // 视频配置
+  const [duration, setDuration] = useState(5)
+  const [resolution, setResolution] = useState('720p')
+  const [aspectRatio, setAspectRatio] = useState('16:9')
 
   // 搜索 & 过滤
   const [search, setSearch] = useState('')
@@ -42,23 +52,94 @@ const TaskPanel: React.FC = () => {
   const [showBatch, setShowBatch] = useState(false)
   const [batchText, setBatchText] = useState('')
   const [batchModel, setBatchModel] = useState('wan-2.6')
+  const [batchDuration, setBatchDuration] = useState(5)
+  const [batchResolution, setBatchResolution] = useState('720p')
+  const [batchAspectRatio, setBatchAspectRatio] = useState('16:9')
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadTasks = () => {
-    window.electronAPI.queue.list().then(setTasks)
+    window.electronAPI.queue.list().then((list) => {
+      setTasks(list)
+      if (list.some((t) => t.status === 'running')) {
+        startPolling()
+      } else if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    })
   }
 
   const loadModels = () => {
-    window.electronAPI.models.list().then(setModels)
+    window.electronAPI.models.list().then((list: ModelCapability[]) => {
+      setModels(list)
+      // 初始化默认模型的配置
+      const cap = list.find((m) => m.id === modelId)
+      if (cap) {
+        setDuration(cap.defaultDuration)
+        setResolution(cap.defaultResolution)
+        setAspectRatio(cap.defaultAspectRatio)
+      }
+    })
+  }
+
+  /** 模型切换时联动更新时长/分辨率/比例选项 */
+  const handleModelChange = (newModelId: string) => {
+    setModelId(newModelId)
+    const cap = MODEL_CAPS[newModelId]
+    if (cap) {
+      setDuration(cap.defaultDuration)
+      setResolution(cap.defaultResolution)
+      setAspectRatio(cap.defaultAspectRatio)
+    }
+  }
+
+  const currentCaps = MODEL_CAPS[modelId]
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const startPolling = () => {
+    if (pollRef.current) return
+    pollRef.current = setInterval(loadTasks, 3000)
   }
 
   useEffect(() => {
     loadTasks()
     loadModels()
-    const timer = setInterval(loadTasks, 3000)
-    return () => clearInterval(timer)
+    startPolling()
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [])
+
+  // 监听全局快捷键
+  useEffect(() => {
+    return window.electronAPI.shortcuts.onFocusPrompt(() => {
+      promptRef.current?.focus()
+    })
+  }, [])
+
+  // 监听来自 HistoryPanel 的 "复制提示词" 事件
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        prompt: string
+        modelId: string
+        duration?: number
+        resolution?: string
+        aspectRatio?: string
+      }
+      setPrompt(detail.prompt)
+      if (detail.modelId) {
+        handleModelChange(detail.modelId)
+      }
+      if (detail.duration !== undefined) setDuration(detail.duration)
+      if (detail.resolution) setResolution(detail.resolution)
+      if (detail.aspectRatio) setAspectRatio(detail.aspectRatio)
+    }
+    window.addEventListener('copy-prompt', handler)
+    return () => window.removeEventListener('copy-prompt', handler)
   }, [])
 
   const handleCreate = () => {
@@ -70,10 +151,14 @@ const TaskPanel: React.FC = () => {
       priority,
       note: note.trim(),
       materialIds: materialIds.length > 0 ? materialIds : undefined,
+      duration,
+      resolution,
+      aspectRatio,
     }).then(() => {
       setPrompt('')
       setNote('')
       setReferenceImages([])
+      startPolling()
       loadTasks()
     })
   }
@@ -94,12 +179,18 @@ const TaskPanel: React.FC = () => {
         .filter((m): m is Material => m !== undefined)
       setReferenceImages((prev) => {
         const existingIds = new Set(prev.map((m) => m.id))
-        const uniqueNew = newImages.filter((m) => !existingIds.has(m.id))
+        const seen = new Set<string>()
+        const uniqueNew = newImages.filter((m) => {
+          if (existingIds.has(m.id) || seen.has(m.id)) return false
+          seen.add(m.id)
+          return true
+        })
         const combined = [...prev, ...uniqueNew]
-        if (combined.length > 5) {
-          alert('单次最多添加 5 张参考图')
+        const limit = currentCaps?.maxImages ?? 5
+        if (combined.length > limit) {
+          alert(`单次最多添加 ${limit} 张参考图`)
         }
-        return combined.slice(0, 5)
+        return combined.slice(0, limit)
       })
     })
   }
@@ -107,6 +198,13 @@ const TaskPanel: React.FC = () => {
   const handleRemoveReference = (id: string) => {
     setReferenceImages((prev) => prev.filter((m) => m.id !== id))
   }
+
+  const handlePickerSelection = (ids: string[]) => {
+    handleAddReference(ids)
+    setShowMaterialPicker(false)
+  }
+
+  const selectedMaterialIds = new Set(referenceImages.map((m) => m.id))
 
   const handleAddFromDialog = async () => {
     const paths = await window.electronAPI.material.openDialog()
@@ -127,19 +225,40 @@ const TaskPanel: React.FC = () => {
 
     setBatchProgress({ current: 0, total: lines.length })
 
-    for (let i = 0; i < lines.length; i++) {
-      await window.electronAPI.queue.create({
-        prompt: lines[i],
-        modelId: batchModel,
-        priority: 'medium',
-      })
-      setBatchProgress({ current: i + 1, total: lines.length })
+    const CONCURRENCY = 5
+    let completed = 0
+    let errorCount = 0
+
+    const queue = [...lines]
+    async function worker(): Promise<void> {
+      while (queue.length > 0) {
+        const line = queue.shift()!
+        try {
+          await window.electronAPI.queue.create({
+            prompt: line,
+            modelId: batchModel,
+            priority: 'medium',
+            duration: batchDuration,
+            resolution: batchResolution,
+            aspectRatio: batchAspectRatio,
+          })
+        } catch {
+          errorCount++
+        }
+        completed++
+        setBatchProgress({ current: completed, total: lines.length })
+      }
     }
+
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, lines.length) }, () => worker()))
 
     setBatchProgress(null)
     setBatchText('')
     setShowBatch(false)
     loadTasks()
+    if (errorCount > 0) {
+      alert(`批量导入完成：${lines.length - errorCount} 条成功，${errorCount} 条失败`)
+    }
   }
 
   const handleFileDrop = (e: React.DragEvent) => {
@@ -174,20 +293,21 @@ const TaskPanel: React.FC = () => {
     return true
   })
 
-  // 各状态计数
-  const statusCounts: Record<TaskStatus, number> = {
-    pending: tasks.filter((t) => t.status === 'pending').length,
-    running: tasks.filter((t) => t.status === 'running').length,
-    completed: tasks.filter((t) => t.status === 'completed').length,
-    failed: tasks.filter((t) => t.status === 'failed').length,
-  }
+  // 各状态计数 — 单次遍历
+  const statusCounts: Record<TaskStatus, number> = tasks.reduce(
+    (acc, t) => {
+      acc[t.status] = (acc[t.status] || 0) + 1
+      return acc
+    },
+    { pending: 0, running: 0, completed: 0, failed: 0 } as Record<TaskStatus, number>,
+  )
 
   const statusBadge = (status: TaskStatus, count?: number) => {
     const colors: Record<TaskStatus, string> = {
-      pending: '#f0ad4e',
-      running: '#5bc0de',
-      completed: '#5cb85c',
-      failed: '#d9534f',
+      pending: 'var(--color-warning)',
+      running: 'var(--color-info)',
+      completed: 'var(--color-success)',
+      failed: 'var(--color-danger)',
     }
     const active = statusFilter === status
     return (
@@ -196,8 +316,8 @@ const TaskPanel: React.FC = () => {
         onClick={() => setStatusFilter(active ? null : status)}
         style={{
           ...styles.statusBtn,
-          backgroundColor: active ? colors[status] : '#e8e8e8',
-          color: active ? '#fff' : '#666',
+          backgroundColor: active ? colors[status] : 'var(--color-bg)',
+          color: active ? '#fff' : 'var(--color-text-secondary)',
           fontWeight: active ? 600 : 400,
         }}
       >
@@ -248,7 +368,7 @@ const TaskPanel: React.FC = () => {
       <div style={styles.form}>
         <select
           value={modelId}
-          onChange={(e) => setModelId(e.target.value)}
+          onChange={(e) => handleModelChange(e.target.value)}
           style={styles.select}
         >
           {models.map((m) => (
@@ -257,6 +377,42 @@ const TaskPanel: React.FC = () => {
             </option>
           ))}
         </select>
+
+        {/* 视频配置行：时长 / 分辨率 / 比例 */}
+        <div style={styles.configRow}>
+          <select
+            value={duration}
+            onChange={(e) => setDuration(Number(e.target.value))}
+            style={{ ...styles.select, flex: 1 }}
+            title="视频时长"
+          >
+            {currentCaps?.durations.map((d) => (
+              <option key={d} value={d}>{d}s</option>
+            ))}
+          </select>
+
+          <select
+            value={resolution}
+            onChange={(e) => setResolution(e.target.value)}
+            style={{ ...styles.select, flex: 1 }}
+            title="视频分辨率"
+          >
+            {currentCaps?.resolutions.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+
+          <select
+            value={aspectRatio}
+            onChange={(e) => setAspectRatio(e.target.value)}
+            style={{ ...styles.select, flex: 1 }}
+            title="画面比例"
+          >
+            {currentCaps?.aspectRatios.map((ar) => (
+              <option key={ar} value={ar}>{ar}</option>
+            ))}
+          </select>
+        </div>
 
         <select
           value={priority}
@@ -286,12 +442,13 @@ const TaskPanel: React.FC = () => {
             } catch { /* 非素材库拖拽，忽略 */ }
           }}
           style={{
-            border: dragOverInput ? '2px dashed #0078d4' : '2px solid transparent',
+            border: dragOverInput ? '2px dashed var(--color-accent)' : '2px solid transparent',
             borderRadius: 4,
             transition: 'border-color 0.2s',
           }}
         >
           <textarea
+            ref={promptRef}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -305,8 +462,10 @@ const TaskPanel: React.FC = () => {
           />
           <ReferenceImageBar
             images={referenceImages}
+            maxCount={currentCaps?.maxImages ?? 5}
             onRemove={handleRemoveReference}
             onAdd={handleAddFromDialog}
+            onOpenPicker={() => setShowMaterialPicker(true)}
           />
         </div>
 
@@ -318,7 +477,7 @@ const TaskPanel: React.FC = () => {
           style={styles.noteInput}
         />
 
-        <button onClick={handleCreate} style={styles.addBtn}>
+        <button className="btn-primary" onClick={handleCreate} style={styles.addBtn}>
           + 添加任务
         </button>
       </div>
@@ -331,7 +490,7 @@ const TaskPanel: React.FC = () => {
           </p>
         )}
         {filteredTasks.map((task) => (
-          <div key={task.id} style={styles.taskCard}>
+          <div key={task.id} className="task-card" style={styles.taskCard}>
             <div style={styles.taskHeader}>
               {statusBadge(task.status)}
               <span
@@ -343,6 +502,7 @@ const TaskPanel: React.FC = () => {
               />
               <span style={styles.modelLabel}>{task.modelId}</span>
               <button
+                className="task-delete-btn"
                 onClick={() => handleDelete(task.id)}
                 style={styles.deleteBtn}
                 title="删除任务"
@@ -351,6 +511,13 @@ const TaskPanel: React.FC = () => {
               </button>
             </div>
             <p style={styles.taskPrompt}>{task.prompt}</p>
+            {(task.duration || task.resolution || task.aspectRatio) && (
+              <p style={styles.videoParams}>
+                {task.duration ? `${task.duration}s` : ''}
+                {task.resolution ? ` · ${task.resolution}` : ''}
+                {task.aspectRatio ? ` · ${task.aspectRatio}` : ''}
+              </p>
+            )}
             {task.note && <p style={styles.noteText}>{task.note}</p>}
             {task.status === 'failed' && (
               <button
@@ -367,6 +534,16 @@ const TaskPanel: React.FC = () => {
         ))}
       </div>
 
+      {/* 素材库选择器 */}
+      {showMaterialPicker && (
+        <MaterialPicker
+          selectedIds={selectedMaterialIds}
+          maxCount={currentCaps?.maxImages ?? 5}
+          onSelectionChange={handlePickerSelection}
+          onClose={() => setShowMaterialPicker(false)}
+        />
+      )}
+
       {/* 批量导入模态框 */}
       {showBatch && (
         <div style={styles.modalOverlay} onClick={() => !batchProgress && setShowBatch(false)}>
@@ -375,7 +552,16 @@ const TaskPanel: React.FC = () => {
 
             <select
               value={batchModel}
-              onChange={(e) => setBatchModel(e.target.value)}
+              onChange={(e) => {
+                const newModel = e.target.value
+                setBatchModel(newModel)
+                const cap = MODEL_CAPS[newModel]
+                if (cap) {
+                  setBatchDuration(cap.defaultDuration)
+                  setBatchResolution(cap.defaultResolution)
+                  setBatchAspectRatio(cap.defaultAspectRatio)
+                }
+              }}
               style={styles.select}
             >
               {models.map((m) => (
@@ -384,6 +570,36 @@ const TaskPanel: React.FC = () => {
                 </option>
               ))}
             </select>
+
+            <div style={styles.configRow}>
+              <select
+                value={batchDuration}
+                onChange={(e) => setBatchDuration(Number(e.target.value))}
+                style={{ ...styles.select, flex: 1 }}
+              >
+                {(MODEL_CAPS[batchModel]?.durations || [5]).map((d) => (
+                  <option key={d} value={d}>{d}s</option>
+                ))}
+              </select>
+              <select
+                value={batchResolution}
+                onChange={(e) => setBatchResolution(e.target.value)}
+                style={{ ...styles.select, flex: 1 }}
+              >
+                {(MODEL_CAPS[batchModel]?.resolutions || ['720p']).map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+              <select
+                value={batchAspectRatio}
+                onChange={(e) => setBatchAspectRatio(e.target.value)}
+                style={{ ...styles.select, flex: 1 }}
+              >
+                {(MODEL_CAPS[batchModel]?.aspectRatios || ['16:9']).map((ar) => (
+                  <option key={ar} value={ar}>{ar}</option>
+                ))}
+              </select>
+            </div>
 
             <textarea
               value={batchText}
@@ -398,8 +614,8 @@ const TaskPanel: React.FC = () => {
             <div
               style={{
                 ...styles.dropZone,
-                borderColor: dragOver ? '#0078d4' : '#ccc',
-                background: dragOver ? '#e8f0fe' : '#fafafa',
+                borderColor: dragOver ? 'var(--color-accent)' : 'var(--color-border)',
+                background: dragOver ? 'var(--color-accent-subtle)' : 'var(--color-bg)',
               }}
               onDragOver={(e) => {
                 e.preventDefault()
@@ -461,139 +677,162 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
-    background: '#f5f5f5',
+    background: 'var(--color-surface)',
   },
   titleRow: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '8px 16px',
-    background: '#e8e8e8',
-    borderBottom: '1px solid #ddd',
+    padding: 'var(--space-3) var(--space-5)',
+    background: 'var(--color-header-bg)',
+    borderBottom: '1px solid var(--color-border)',
   },
   title: {
     margin: 0,
-    fontSize: 14,
+    fontSize: 'var(--text-md)',
     fontWeight: 600,
+    color: 'var(--color-text)',
+    letterSpacing: 'var(--tracking-tight)',
   },
   batchBtn: {
-    padding: '4px 10px',
-    background: '#5cb85c',
+    padding: '4px 12px',
+    background: 'var(--color-success)',
     color: '#fff',
     border: 'none',
-    borderRadius: 4,
+    borderRadius: 'var(--radius-sm)',
     cursor: 'pointer',
-    fontSize: 11,
+    fontSize: 'var(--text-xs)',
     fontWeight: 500,
+    letterSpacing: 'var(--tracking-normal)',
   },
   searchBar: {
     display: 'flex',
     alignItems: 'center',
-    padding: '6px 12px',
-    borderBottom: '1px solid #ddd',
+    padding: 'var(--space-2) var(--space-4)',
+    borderBottom: '1px solid var(--color-border-light)',
     position: 'relative',
   },
   searchInput: {
     flex: 1,
     padding: '5px 8px',
-    borderRadius: 4,
-    border: '1px solid #ccc',
-    fontSize: 12,
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--color-border)',
+    fontSize: 'var(--text-sm)',
+    background: 'var(--color-bg)',
+    color: 'var(--color-text)',
   },
   searchClear: {
     position: 'absolute',
     right: 16,
     background: 'none',
     border: 'none',
-    color: '#999',
+    color: 'var(--color-text-muted)',
     cursor: 'pointer',
     fontSize: 14,
     padding: '0 4px',
+    lineHeight: '1',
   },
   statusRow: {
     display: 'flex',
-    gap: '6px',
-    padding: '6px 12px',
-    borderBottom: '1px solid #ddd',
+    gap: 'var(--space-2)',
+    padding: 'var(--space-2) var(--space-4)',
+    borderBottom: '1px solid var(--color-border-light)',
     flexWrap: 'wrap',
   },
   statusBtn: {
-    padding: '2px 8px',
-    borderRadius: 3,
+    padding: '3px 10px',
+    borderRadius: 'var(--radius-sm)',
     border: 'none',
     cursor: 'pointer',
-    fontSize: 10,
-    textTransform: 'uppercase',
+    fontSize: 'var(--text-xs)',
+    fontWeight: 500,
+    letterSpacing: 'var(--tracking-wide)',
+    transition: 'background var(--transition-fast), color var(--transition-fast)',
   },
   form: {
-    padding: '12px',
+    padding: 'var(--space-4)',
     display: 'flex',
     flexDirection: 'column',
-    gap: '8px',
-    borderBottom: '1px solid #ddd',
+    gap: 'var(--space-3)',
+    borderBottom: '1px solid var(--color-border)',
+  },
+  configRow: {
+    display: 'flex',
+    gap: 'var(--space-2)',
   },
   select: {
     padding: '6px 8px',
-    borderRadius: 4,
-    border: '1px solid #ccc',
-    fontSize: 13,
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--color-border)',
+    fontSize: 'var(--text-base)',
+    background: 'var(--color-bg)',
+    color: 'var(--color-text)',
+    cursor: 'pointer',
   },
   textarea: {
-    padding: '8px',
-    borderRadius: 4,
-    border: '1px solid #ccc',
-    fontSize: 13,
+    padding: 'var(--space-3)',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--color-border)',
+    fontSize: 'var(--text-base)',
     resize: 'vertical',
-    fontFamily: 'inherit',
+    fontFamily: 'var(--font-sans)',
+    background: 'var(--color-bg)',
+    color: 'var(--color-text)',
+    lineHeight: 'var(--leading-relaxed)',
   },
   noteInput: {
     padding: '6px 8px',
-    borderRadius: 4,
-    border: '1px solid #ccc',
-    fontSize: 12,
-    fontFamily: 'inherit',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--color-border)',
+    fontSize: 'var(--text-sm)',
+    fontFamily: 'var(--font-sans)',
+    background: 'var(--color-bg)',
+    color: 'var(--color-text-secondary)',
   },
   addBtn: {
-    padding: '8px 12px',
-    background: '#0078d4',
-    color: '#fff',
+    padding: '8px 16px',
+    background: 'var(--color-accent)',
+    color: 'var(--color-text-inverse)',
     border: 'none',
-    borderRadius: 4,
+    borderRadius: 'var(--radius-md)',
     cursor: 'pointer',
-    fontSize: 13,
+    fontSize: 'var(--text-base)',
     fontWeight: 500,
+    letterSpacing: 'var(--tracking-normal)',
   },
   list: {
     flex: 1,
     overflowY: 'auto',
-    padding: '8px',
+    padding: 'var(--space-3)',
   },
   empty: {
     textAlign: 'center',
-    color: '#999',
-    fontSize: 13,
-    padding: 20,
+    color: 'var(--color-text-muted)',
+    fontSize: 'var(--text-base)',
+    padding: 24,
   },
   taskCard: {
-    background: '#fff',
-    borderRadius: 4,
-    padding: '10px',
-    marginBottom: '8px',
-    border: '1px solid #e0e0e0',
+    background: 'var(--color-surface)',
+    borderRadius: 'var(--radius-md)',
+    padding: 'var(--space-4)',
+    marginBottom: 'var(--space-2)',
+    border: '1px solid var(--color-border-light)',
+    boxShadow: 'var(--shadow-sm)',
+    transition: 'box-shadow var(--transition-fast), border-color var(--transition-fast)',
   },
   taskHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    marginBottom: '6px',
+    gap: 'var(--space-3)',
+    marginBottom: 'var(--space-2)',
   },
   badge: {
-    fontSize: 10,
+    fontSize: 'var(--text-xs)',
     fontWeight: 600,
     color: '#fff',
     padding: '2px 6px',
-    borderRadius: 3,
-    textTransform: 'uppercase',
+    borderRadius: 'var(--radius-sm)',
+    letterSpacing: 'var(--tracking-wide)',
   },
   priorityDot: {
     width: 8,
@@ -602,45 +841,56 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   modelLabel: {
-    fontSize: 11,
-    color: '#666',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-secondary)',
     flex: 1,
   },
   deleteBtn: {
     background: 'none',
     border: 'none',
-    color: '#d9534f',
+    color: 'var(--color-danger)',
     cursor: 'pointer',
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: 600,
     padding: '0 4px',
+    lineHeight: '1',
+    opacity: 0.6,
+    transition: 'opacity var(--transition-fast)',
   },
   taskPrompt: {
     margin: 0,
-    fontSize: 13,
-    color: '#333',
+    fontSize: 'var(--text-base)',
+    color: 'var(--color-text)',
     wordBreak: 'break-word',
+    lineHeight: 'var(--leading-normal)',
+  },
+  videoParams: {
+    margin: 'var(--space-1) 0 0',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-accent)',
+    fontWeight: 500,
   },
   noteText: {
-    margin: '4px 0 0',
-    fontSize: 11,
-    color: '#888',
+    margin: 'var(--space-1) 0 0',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-muted)',
     fontStyle: 'italic',
   },
   retryBtn: {
-    marginTop: 4,
-    padding: '4px 8px',
-    background: '#f0ad4e',
+    marginTop: 'var(--space-1)',
+    padding: '4px 10px',
+    background: 'var(--color-warning)',
     color: '#fff',
     border: 'none',
-    borderRadius: 3,
+    borderRadius: 'var(--radius-sm)',
     cursor: 'pointer',
-    fontSize: 11,
+    fontSize: 'var(--text-xs)',
+    fontWeight: 500,
   },
   error: {
-    margin: '4px 0 0',
-    fontSize: 11,
-    color: '#d9534f',
+    margin: 'var(--space-1) 0 0',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-danger)',
   },
   modalOverlay: {
     position: 'fixed',
@@ -648,68 +898,71 @@ const styles: Record<string, React.CSSProperties> = {
     left: 0,
     right: 0,
     bottom: 0,
-    background: 'rgba(0,0,0,0.5)',
+    background: 'rgba(26, 29, 35, 0.5)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 1000,
+    zIndex: 'var(--z-modal)',
+    backdropFilter: 'blur(2px)',
   },
   modal: {
-    background: '#fff',
-    borderRadius: 8,
-    padding: '20px',
+    background: 'var(--color-surface)',
+    borderRadius: 'var(--radius-lg)',
+    padding: 'var(--space-6)',
     width: 420,
     maxHeight: '80vh',
     display: 'flex',
     flexDirection: 'column',
-    gap: '12px',
-    boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+    gap: 'var(--space-4)',
+    boxShadow: 'var(--shadow-overlay)',
   },
   modalTitle: {
     margin: 0,
-    fontSize: 15,
+    fontSize: 'var(--text-lg)',
     fontWeight: 600,
+    color: 'var(--color-text)',
   },
   dropZone: {
     border: '2px dashed',
-    borderRadius: 6,
-    padding: '16px',
+    borderRadius: 'var(--radius-md)',
+    padding: 'var(--space-5)',
     textAlign: 'center',
-    transition: 'border-color 0.2s, background 0.2s',
+    transition: 'border-color var(--transition-base), background var(--transition-base)',
   },
   dropText: {
     margin: 0,
-    fontSize: 12,
-    color: '#666',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--color-text-secondary)',
   },
   dropLink: {
     background: 'none',
     border: 'none',
-    color: '#0078d4',
+    color: 'var(--color-accent)',
     cursor: 'pointer',
-    fontSize: 12,
+    fontSize: 'var(--text-sm)',
     textDecoration: 'underline',
     padding: 0,
   },
   progress: {
     margin: 0,
-    fontSize: 12,
-    color: '#5cb85c',
+    fontSize: 'var(--text-sm)',
+    color: 'var(--color-success)',
     fontWeight: 500,
   },
   modalActions: {
     display: 'flex',
     justifyContent: 'flex-end',
-    gap: '8px',
+    gap: 'var(--space-3)',
   },
   cancelBtn: {
-    padding: '8px 12px',
-    background: '#e8e8e8',
-    color: '#333',
-    border: 'none',
-    borderRadius: 4,
+    padding: '8px 14px',
+    background: 'var(--color-bg)',
+    color: 'var(--color-text-secondary)',
+    border: '1px solid var(--color-border)',
+    borderRadius: 'var(--radius-md)',
     cursor: 'pointer',
-    fontSize: 13,
+    fontSize: 'var(--text-base)',
+    fontWeight: 500,
   },
 }
 

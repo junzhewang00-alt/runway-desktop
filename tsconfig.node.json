@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "composite": true
+  },
+  "include": [
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "src/adapters/**/*.ts",
+    "src/browser/**/*.ts",
+    "src/database/**/*.ts",
+    "src/logs/**/*.ts",
+    "src/queue/**/*.ts",
+    "src/services/**/*.ts",
+    "src/types/**/*.ts",
+    "electron.vite.config.ts"
+  ]
+}

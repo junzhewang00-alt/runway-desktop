@@ -1,13 +1,14 @@
 import type { BrowserView } from 'electron'
-import { clipboard } from 'electron'
 import {
   RUNWAY_SELECTORS,
   ADAPTER_TIMEOUT,
   POLL_INTERVAL,
   MAX_WAIT_TIME,
-  clickButtonByTextJS,
   clickOptionByTextJS,
+  clickSettingByLabelJS,
+  clickValueChipByTextJS,
 } from './runway.selectors'
+import { MODEL_CAPS } from '../types/models'
 
 export type GenerationStatus = 'idle' | 'generating' | 'completed' | 'failed'
 
@@ -30,8 +31,14 @@ export interface IRunwayAdapter {
   releaseLockForTask(taskId: string): void
   /** 上传参考图到 Runway 页面 */
   uploadReferenceImages(imagePaths: string[], modelId: string): Promise<void>
+  /** 选择视频时长（秒） */
+  selectDuration(duration: number): Promise<void>
+  /** 选择视频分辨率 */
+  selectResolution(resolution: string): Promise<void>
+  /** 选择画面比例 */
+  selectAspectRatio(ratio: string): Promise<void>
   /** 并发提交：仅提交不等待，完成后由 CDP monitor 回调 */
-  submitOnly(taskId: string, modelId: string, prompt: string, imagePaths?: string[]): Promise<void>
+  submitOnly(taskId: string, modelId: string, prompt: string, imagePaths?: string[], duration?: number, resolution?: string, aspectRatio?: string): Promise<void>
   /** 启动持久 CDP 网络监听（应用启动时调用一次） */
   startPersistentMonitor(): Promise<void>
   stopPersistentMonitor(): void
@@ -99,17 +106,31 @@ class AsyncLock {
 
 const MAX_RETRIES = 3
 const CDP_RETRY_DELAY = 3000
+const CDP_IDLE_DETACH_MS = 30_000
 
 /** 设为 true 输出 DOM 诊断日志（调试 Runway 页面结构时启用） */
 const ADAPTER_DEBUG = false
 
-/** 模型 ID 到 Runway 页面显示名称的映射 */
-const MODEL_DISPLAY_NAMES: Record<string, string> = {
-  'wan-2.6': 'WAN 2.6',
-  'gen-4': 'Gen-4',
-  'gen-4.5': 'Gen-4.5',
-  aleph: 'Aleph',
-  'seedance-2': 'Seedance 2.0',
+// ── 反封禁工具函数 ──
+
+/** 延迟 + 随机抖动，掩盖自动化定时特征 */
+function delay(ms: number, jitterPct = 0.3): Promise<void> {
+  const jitter = ms * jitterPct
+  const actual = ms + (Math.random() * 2 - 1) * jitter
+  return new Promise((r) => setTimeout(r, Math.round(actual)))
+}
+
+/** 模拟人类点击间隔 (75ms ~ 225ms) */
+function humanClickGap(): Promise<void> {
+  return delay(150, 0.5)
+}
+
+/** 坐标加 ±3px 随机噪声，模拟真鼠标亚像素抖动 */
+function jitterPoint(x: number, y: number): { x: number; y: number } {
+  return {
+    x: Math.round(x + (Math.random() - 0.5) * 6),
+    y: Math.round(y + (Math.random() - 0.5) * 6),
+  }
 }
 
 export class RunwayAdapter implements IRunwayAdapter {
@@ -130,12 +151,18 @@ export class RunwayAdapter implements IRunwayAdapter {
   private onComplete: ((taskId: string, result: GenerationResult) => void) | null = null
   private onSlotFreed: (() => void) | null = null
 
+  // ── CDP 按需挂载 ──
+  private cdpIdleTimer: ReturnType<typeof setTimeout> | null = null
+
   setBrowserView(bv: BrowserView): void {
+    // 先清理旧 BrowserView 的 debugger listener，再切换到新的
+    const wasActive = this.monitorActive
+    if (wasActive) {
+      this.stopPersistentMonitor()
+    }
     this.browserView = bv
     this.pageReady = false
-    // 如果 monitor 之前启动了，用新 WebContents 重启
-    if (this.monitorActive) {
-      this.stopPersistentMonitor()
+    if (wasActive) {
       this.startPersistentMonitor().catch((err) => {
         console.log('[Adapter] Failed to restart monitor after BrowserView swap:', err)
       })
@@ -185,6 +212,11 @@ export class RunwayAdapter implements IRunwayAdapter {
    * 持锁时间仅 10-20s（页面交互），不等待视频生成完成。
    * 生成完成后由持久 CDP monitor 通过 setCompletionCallback 回调通知。
    */
+  /** Seedance 模型族使用不同的 UI 交互模式（参考槽位上传、可编辑输入框） */
+  private isSeedanceModel(modelId: string): boolean {
+    return modelId === 'seedance-2' || modelId === 'seedance2.0Fast'
+  }
+
   /**
    * 将参考图上传到 Runway 页面。
    *
@@ -196,15 +228,10 @@ export class RunwayAdapter implements IRunwayAdapter {
     if (imagePaths.length === 0) return
 
     const wc = this.getWebContents()
-    const isSeedance = modelId === 'seedance-2'
+    const isSeedance = this.isSeedanceModel(modelId)
 
     if (isSeedance) {
       // ── Seedance 2.0: 点击参考槽 + CDP 文件注入 ──
-      // 策略：
-      //   1. 点击 Reference 槽位上的上传图标按钮（激活该槽位）
-      //   2. 通过 CDP DOM.querySelectorAll 找到 <input type="file">
-      //   3. 用 CDP DOM.setFileInputFiles 注入文件（绕过原生对话框）
-      //   4. 派发 change 事件通知 React
       const dbg = wc.debugger
       const wasAttached = dbg.isAttached()
 
@@ -213,80 +240,123 @@ export class RunwayAdapter implements IRunwayAdapter {
           dbg.attach('1.3')
         }
 
+        // 诊断：打印全部 imagePaths 顺序（检查 DB 返回顺序是否正确）
+        console.log(`[Adapter] Seedance upload: imagePaths order = [${imagePaths.map(p => p.split(/[/\\\\]/).pop()).join(', ')}]`)
+
+        // 诊断：打印当前页面上的空槽位和已填充槽位的布局
+        const slotLayout: string = await wc.executeJavaScript(`
+          (function() {
+            var result = [];
+            // 空槽位
+            var empties = document.querySelectorAll('div[class*="emptySlotContainer-"]');
+            for (var e = 0; e < empties.length; e++) {
+              if (empties[e].offsetParent === null) continue;
+              var r = empties[e].getBoundingClientRect();
+              result.push('EMPTY left=' + Math.round(r.left) + ' top=' + Math.round(r.top) + ' w=' + Math.round(r.width));
+            }
+            // 已填充槽位
+            var filled = document.querySelectorAll('button[class*="slot-"][aria-label*="View IMG"]');
+            for (var f = 0; f < filled.length; f++) {
+              if (filled[f].offsetParent === null) continue;
+              var fr = filled[f].getBoundingClientRect();
+              var label = filled[f].getAttribute('aria-label') || '';
+              result.push('FILLED left=' + Math.round(fr.left) + ' label=' + label);
+            }
+            // "+ References" 按钮
+            var btns = document.querySelectorAll('button');
+            for (var b = 0; b < btns.length; b++) {
+              var t = (btns[b].textContent || '').trim();
+              if (t.indexOf('+') >= 0 && t.indexOf('Reference') >= 0 && btns[b].offsetParent !== null) {
+                var br = btns[b].getBoundingClientRect();
+                result.push('ADD_REF left=' + Math.round(br.left) + ' top=' + Math.round(br.top));
+              }
+            }
+            return JSON.stringify(result);
+          })()
+        `)
+        console.log(`[Adapter] Seedance slot layout: ${slotLayout}`)
+
         for (let i = 0; i < imagePaths.length; i++) {
           const filePath = imagePaths[i]
           console.log(`[Adapter] Seedance ref ${i + 1}/${imagePaths.length}: ${filePath}`)
 
-          // Step 1: 点击对应槽位的上传按钮
+          // Step 1: 找到空槽位，按视觉位置（左→右）排序，点击第 i 个
+          let addRefRetries = 0
           const clickResult: string = await wc.executeJavaScript(`
             (function() {
               var slotIdx = ${i};
-              var uploads = [];
 
-              // 查找所有上传相关的按钮/图标
-              document.querySelectorAll('*').forEach(function(el) {
-                if (el.offsetParent === null) return;
-                var aria = (el.getAttribute('aria-label') || '').toLowerCase();
-                var title = (el.getAttribute('title') || '').toLowerCase();
-                var cls = (typeof el.className === 'string') ? el.className.toLowerCase() : '';
-                var tag = (el.tagName || '');
-
-                // 匹配上传按钮的特征
-                var isUploadBtn =
-                  aria.indexOf('upload') >= 0 ||
-                  aria.indexOf('reference') >= 0 ||
-                  title.indexOf('upload') >= 0 ||
-                  (tag === 'BUTTON' && cls.indexOf('upload') >= 0) ||
-                  (tag === 'BUTTON' && el.querySelector('svg') &&
-                   (el.innerHTML || '').indexOf('arrow') >= 0);
-
-                // 查找 "+ References" 特征
-                var txt = (el.textContent || '').trim();
-                var isAddRef = (txt.indexOf('+') >= 0 && txt.indexOf('Reference') >= 0);
-
-                if (isUploadBtn && uploads.indexOf(el) === -1) uploads.push(el);
-                if (isAddRef && uploads.indexOf(el) === -1) uploads.push(el);
-              });
-
-              // 分离上传按钮和 "+ References"
-              var upBtns = uploads.filter(function(b) {
-                return (b.textContent || '').trim().indexOf('+ References') === -1;
-              });
-              var addBtn = uploads.find(function(b) {
-                return (b.textContent || '').trim().indexOf('+ References') >= 0;
-              });
-
-              if (upBtns.length === 0) return 'NO_UPLOAD_BUTTONS';
-
-              // 如果槽不够，点 "+ References"
-              if (slotIdx >= upBtns.length) {
-                if (addBtn) {
-                  var r = addBtn.getBoundingClientRect();
-                  addBtn.dispatchEvent(new MouseEvent('click', {
-                    bubbles: true, cancelable: true,
-                    clientX: r.left + r.width/2, clientY: r.top + r.height/2, button: 0
-                  }));
-                  addBtn.click();
-                  return 'ADD_REF_CLICKED';
-                }
-                slotIdx = upBtns.length - 1;
+              // 空槽位: <div class="emptySlotContainer-WL6MCG" data-variant="placeholder">
+              //            <div class="slot-YWcSul empty-rQrgeh"></div>
+              //          </div>
+              var emptySlots = document.querySelectorAll(
+                'div[class*="emptySlotContainer-"]'
+              );
+              // 过滤掉不可见的
+              var visible = [];
+              for (var s = 0; s < emptySlots.length; s++) {
+                if (emptySlots[s].offsetParent !== null) visible.push(emptySlots[s]);
               }
 
-              var btn = upBtns[slotIdx];
-              var r = btn.getBoundingClientRect();
-              btn.dispatchEvent(new MouseEvent('click', {
+              // 按视觉位置从左到右排序（关键：DOM 顺序 ≠ 视觉顺序）
+              visible.sort(function(a, b) {
+                return a.getBoundingClientRect().left - b.getBoundingClientRect().left;
+              });
+
+              // "+ References" 按钮
+              var addBtn = null;
+              var allBtns = document.querySelectorAll('button');
+              for (var b = 0; b < allBtns.length; b++) {
+                var txt = (allBtns[b].textContent || '').trim();
+                if (txt.indexOf('+') >= 0 && txt.indexOf('Reference') >= 0 && allBtns[b].offsetParent !== null) {
+                  addBtn = allBtns[b];
+                  break;
+                }
+              }
+
+              if (visible.length === 0) return 'NO_UPLOAD_BUTTONS';
+
+              // 如果槽不够，点 "+ References"
+              if (slotIdx >= visible.length) {
+                if (addBtn) {
+                  var addR = addBtn.getBoundingClientRect();
+                  addBtn.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true, cancelable: true,
+                    clientX: addR.left + addR.width/2, clientY: addR.top + addR.height/2, button: 0
+                  }));
+                  return 'ADD_REF_CLICKED';
+                }
+                slotIdx = visible.length - 1;
+              }
+
+              // 点击空槽位内的 slot div（实际响应点击的元素）
+              var slot = visible[slotIdx];
+              var clickTarget = slot.querySelector('[class*="slot-"]') || slot;
+              var r = clickTarget.getBoundingClientRect();
+              clickTarget.dispatchEvent(new MouseEvent('click', {
                 bubbles: true, cancelable: true,
                 clientX: r.left + r.width/2, clientY: r.top + r.height/2, button: 0
               }));
-              btn.click();
 
-              return 'CLICKED:' + slotIdx + ' tag=' + (btn.tagName || '?');
+              return 'CLICKED:' + slotIdx + ' left=' + Math.round(r.left);
             })()
           `)
           console.log(`[Adapter] Seedance click: ${clickResult}`)
 
+          // 如果点了 "+ References" 按钮，说明槽位不够，需要等待新槽出现后重试
+          if (clickResult === 'ADD_REF_CLICKED') {
+            addRefRetries++
+            if (addRefRetries <= 3) {
+              console.log(`[Adapter] Seedance: new slot requested, retry ${addRefRetries}/3`)
+              await delay(1500)
+              i-- // 重试当前图片（循环末尾 i++ 会回到原索引）
+              continue
+            }
+            console.warn(`[Adapter] Seedance: add-ref retry limit exceeded, falling through`)
+          }
+
           // 等待 DOM 更新（如果有新的 file input 出现）
-          await new Promise((r) => setTimeout(r, 800))
+          await delay(800)
 
           // Step 2: CDP 查找 file input 并注入文件
           const docResult = await dbg.sendCommand('DOM.getDocument', { depth: 0 })
@@ -306,24 +376,16 @@ export class RunwayAdapter implements IRunwayAdapter {
               nodeId: targetNodeId,
             })
             console.log(`[Adapter] Seedance CDP: file injected on node ${targetNodeId}`)
-
-            // Step 3: 派发 change 事件
-            await wc.executeJavaScript(`
-              (function() {
-                var inputs = document.querySelectorAll('input[type="file"]');
-                var input = inputs[inputs.length - 1];
-                if (input) {
-                  ['change', 'input'].forEach(function(t) {
-                    input.dispatchEvent(new Event(t, { bubbles: true }));
-                  });
-                }
-              })()
-            `)
+            // DOM.setFileInputFiles 触发原生 change 事件，不再手动 dispatch 避免重复
           } else {
             console.warn(`[Adapter] Seedance: no file input found in DOM after click`)
           }
 
-          await new Promise((r) => setTimeout(r, 1000))
+          // 随机间隔 4000-8000ms，等待 Runway React 完成上传→槽位状态变更，
+          // 避免下一轮迭代时槽位状态未刷新导致顺序错乱
+          const gap = 4000 + Math.floor(Math.random() * 4000)
+          console.log(`[Adapter] Seedance: waiting ${gap}ms before next image`)
+          await delay(gap)
         }
       } catch (err) {
         console.error('[Adapter] Seedance CDP upload error:', err)
@@ -333,65 +395,555 @@ export class RunwayAdapter implements IRunwayAdapter {
         }
       }
     } else {
-      // ── WAN 2.6 / Gen-4: First Video Frame 拖放上传 ──
-      for (let i = 0; i < imagePaths.length; i++) {
-        const filePath = imagePaths[i]
-        console.log(`[Adapter] Uploading reference image ${i + 1}/${imagePaths.length}: ${filePath}`)
+      // ── WAN 2.6 / Gen-4: 优先 CDP 文件注入 → 兜底 DragEvent ──
+      // CDP DOM.setFileInputFiles 精准注入到单个 <input type="file">，
+      // 避免 DragEvent 冒泡导致同一文件被多个 React 组件重复处理。
+      const dbg = wc.debugger
+      const wasAttached = dbg.isAttached()
 
-        const uploaded: boolean = await wc.executeJavaScript(`
-          (function() {
-            var dropTargets = document.querySelectorAll(
-              '[class*="FirstFrame"], [class*="first-frame"], ' +
-              '[class*="upload-area"], [class*="Upload"], ' +
-              '[class*="dropzone"], [class*="DropZone"]'
-            );
+      // CDP monitor 可能已 attach debugger — 直接复用，不重复 attach
+      const needsAttach = !wasAttached
+      let useCDP = false
 
-            if (dropTargets.length === 0) {
-              var all = document.querySelectorAll('*');
-              for (var k = 0; k < all.length; k++) {
-                var txt = (all[k].textContent || '').trim();
-                if (txt === 'First Video Frame' && all[k].offsetParent !== null) {
-                  var closest = all[k].closest('div, section, [class*="upload"]');
-                  dropTargets = [closest || all[k]];
+      try {
+        if (needsAttach) {
+          dbg.attach('1.3')
+        }
+
+        // 查找 <input type="file">（React 拖放区通常有隐藏的 file input）
+        const docResult = await dbg.sendCommand('DOM.getDocument', { depth: 0 })
+        const rootNodeId: number = (docResult as any).root.nodeId
+        const queryResult = await dbg.sendCommand('DOM.querySelectorAll', {
+          nodeId: rootNodeId,
+          selector: 'input[type="file"]',
+        })
+        const nodeIds: number[] = (queryResult as any).nodeIds || []
+        useCDP = nodeIds.length > 0
+
+        if (useCDP) {
+          // ── CDP 路径（精准，每次只注入一个 input）──
+          for (let i = 0; i < imagePaths.length; i++) {
+            const filePath = imagePaths[i]
+            console.log(`[Adapter] CDP uploading image ${i + 1}/${imagePaths.length}: ${filePath}`)
+
+            // 每个 input 可能对应一个参考图槽位，按顺序注入
+            const targetIdx = Math.min(i, nodeIds.length - 1)
+            const targetNodeId = nodeIds[targetIdx]
+
+            await dbg.sendCommand('DOM.setFileInputFiles', {
+              files: [filePath],
+              nodeId: targetNodeId,
+            })
+            console.log(`[Adapter] CDP: file injected on node ${targetNodeId}`)
+            // DOM.setFileInputFiles 触发原生 change 事件，React 事件委托自动捕获，
+            // 不再手动 dispatch 避免重复上传同一文件
+            await delay(1000)
+          }
+        }
+      } catch (err) {
+        console.error('[Adapter] CDP upload error for non-Seedance, falling back to DragEvent:', err)
+        useCDP = false
+      } finally {
+        if (needsAttach && dbg.isAttached()) {
+          try { dbg.detach() } catch { /* ok */ }
+        }
+      }
+
+      // ── 兜底：DragEvent 模拟（CDP 不可用或页面无 file input 时）──
+      if (!useCDP) {
+        for (let i = 0; i < imagePaths.length; i++) {
+          const filePath = imagePaths[i]
+          console.log(`[Adapter] DragEvent fallback image ${i + 1}/${imagePaths.length}: ${filePath}`)
+
+          const uploaded: boolean = await wc.executeJavaScript(`
+            (function() {
+              var candidates = document.querySelectorAll(
+                '[class*="FirstFrame"], [class*="first-frame"], ' +
+                '[class*="upload-area"], [class*="Upload"], ' +
+                '[class*="dropzone"], [class*="DropZone"]'
+              );
+
+              // 找到最外层候选元素（不被其他候选元素包含），
+              // 避免 bubbles: true 导致嵌套祖先重复处理同一文件
+              var target = null;
+              for (var j = 0; j < candidates.length; j++) {
+                var el = candidates[j];
+                var nested = false;
+                for (var k = 0; k < candidates.length; k++) {
+                  if (j !== k && candidates[k].contains(el) && candidates[k] !== el) {
+                    nested = true;
+                    break;
+                  }
+                }
+                if (!nested) {
+                  target = el;
                   break;
                 }
               }
-            }
 
-            if (dropTargets.length === 0) return false;
+              if (!target) {
+                var all = document.querySelectorAll('*');
+                for (var k = 0; k < all.length; k++) {
+                  var txt = (all[k].textContent || '').trim();
+                  if (txt === 'First Video Frame' && all[k].offsetParent !== null) {
+                    target = all[k];
+                    break;
+                  }
+                }
+              }
 
-            var dt = new DataTransfer();
-            var fileName = ${JSON.stringify(filePath.split(/[/\\\\]/).pop() || 'image.png')};
-            try {
-              dt.items.add(new File([''], fileName, { type: 'image/png' }));
-            } catch(e) {
-              return false;
-            }
+              if (!target) return false;
 
-            ;['dragenter', 'dragover', 'drop'].forEach(function(type) {
-              var ev = new DragEvent(type, {
+              var dt = new DataTransfer();
+              var fileName = ${JSON.stringify(filePath.split(/[/\\\\]/).pop() || 'image.png')};
+              try {
+                dt.items.add(new File([''], fileName, { type: 'image/png' }));
+              } catch(e) {
+                return false;
+              }
+
+              // 仅 dispatch drop（不 dispatch dragenter/dragover，避免重复触发文件处理）
+              var ev = new DragEvent('drop', {
                 bubbles: true, cancelable: true,
                 dataTransfer: dt,
               });
-              dropTargets[0].dispatchEvent(ev);
-            });
+              target.dispatchEvent(ev);
+              return true;
+            })()
+          `)
 
-            return true;
-          })()
-        `)
-
-        if (!uploaded) {
-          console.warn(`[Adapter] Cannot upload image ${filePath} — Runway upload area not found in DOM`)
+          if (!uploaded) {
+            console.warn(`[Adapter] Cannot upload image ${filePath} — Runway upload area not found in DOM`)
+          }
+          await delay(1000)
         }
-
-        await new Promise((r) => setTimeout(r, 1000))
       }
     }
 
     console.log(`[Adapter] Reference image upload complete: ${imagePaths.length} images`)
   }
 
-  async submitOnly(taskId: string, modelId: string, prompt: string, imagePaths?: string[]): Promise<void> {
+  /** 选择视频时长。
+   *  Seedance 2.0: 可编辑输入框（直接键入数字）
+   *  其他模型: 下拉菜单选择 */
+  async selectDuration(duration: number): Promise<void> {
+    const wc = this.getWebContents()
+
+    // Seedance 模型族使用可编辑输入框
+    if (this.isSeedanceModel(this.currentModel)) {
+      await this.selectDurationViaInput(duration)
+      return
+    }
+
+    const target = `${duration}s`
+
+    // 1. 尝试直接点击当前值（如 "5s" 按钮）
+    let clicked: boolean = await wc.executeJavaScript(clickValueChipByTextJS(target))
+    if (!clicked) {
+      // 2. 尝试通过 Duration 标签定位
+      clicked = await wc.executeJavaScript(clickSettingByLabelJS('Duration'))
+      if (!clicked) {
+        // 3. 兜底：查找页面上所有可能的 duration 控制
+        clicked = await wc.executeJavaScript(`
+          (function() {
+            var all = document.querySelectorAll('button, [role="button"], [role="combobox"]');
+            for (var i = 0; i < all.length; i++) {
+              var t = (all[i].textContent || '').trim().toLowerCase();
+              if (/^\\d+s$/.test(t) && all[i].offsetParent !== null) {
+                all[i].click();
+                return true;
+              }
+            }
+            return false;
+          })()
+        `)
+        if (!clicked) {
+          console.log(`[Adapter] Duration control not found for ${target}, skipping`)
+          return
+        }
+      }
+    }
+
+    // 等下拉展开
+    await delay(800)
+
+    // 诊断：抓取下拉中所有可见文本，确认 Runway 实际显示的格式
+    const dropdownTexts: string = await wc.executeJavaScript(`
+      (function() {
+        var containers = document.querySelectorAll(
+          '[role="listbox"], [role="menu"], ' +
+          '[class*="popover"], [class*="Popover"], [class*="dropdown"], [class*="Dropdown"], ' +
+          '[class*="menu"], [class*="Menu"], [class*="panel"], [class*="Panel"]'
+        );
+        var texts = [];
+        for (var c = 0; c < containers.length; c++) {
+          if (containers[c].offsetParent === null) continue;
+          var items = containers[c].querySelectorAll('*');
+          for (var i = 0; i < items.length; i++) {
+            if (items[i].offsetParent === null) continue;
+            var t = (items[i].textContent || '').trim();
+            if (t.length > 0 && t.length < 30 && items[i].children.length === 0) {
+              texts.push(t);
+            }
+          }
+        }
+        return JSON.stringify([...new Set(texts)]);
+      })()
+    `)
+    console.log(`[Adapter] Duration dropdown visible texts for target="${target}":`, dropdownTexts)
+
+    // 查找下拉中匹配选项的坐标，用 OS 级点击（React SPA 更可靠）
+    // 匹配多种可能格式: "10s" / "10 sec" / "10 seconds" / "10"
+    const optionCoords: string = await wc.executeJavaScript(`
+      (function() {
+        var dur = ${duration};
+        var patterns = [dur + 's', dur + ' sec', dur + ' seconds', String(dur)];
+        var containers = document.querySelectorAll(
+          '[role="listbox"], [role="menu"], ' +
+          '[class*="popover"], [class*="Popover"], [class*="dropdown"], [class*="Dropdown"], ' +
+          '[class*="menu"], [class*="Menu"], [class*="panel"], [class*="Panel"]'
+        );
+        var searchRoots = containers.length > 0 ? containers : [document.body];
+        for (var c = 0; c < searchRoots.length; c++) {
+          if (searchRoots[c].offsetParent === null && searchRoots[c] !== document.body) continue;
+          var items = searchRoots[c].querySelectorAll('*');
+          for (var i = 0; i < items.length; i++) {
+            var el = items[i];
+            if (el.offsetParent === null) continue;
+            var t = (el.textContent || '').trim().toLowerCase();
+            for (var p = 0; p < patterns.length; p++) {
+              if (t === patterns[p]) {
+                var r = el.getBoundingClientRect();
+                return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+              }
+            }
+          }
+        }
+        return null;
+      })()
+    `)
+
+    if (optionCoords) {
+      const oc = JSON.parse(optionCoords)
+      const p1 = jitterPoint(oc.x, oc.y)
+      const p2 = jitterPoint(oc.x, oc.y)
+      wc.sendInputEvent({ type: 'mouseDown', x: p1.x, y: p1.y, button: 'left', clickCount: 1 })
+      await humanClickGap()
+      wc.sendInputEvent({ type: 'mouseUp', x: p2.x, y: p2.y, button: 'left', clickCount: 1 })
+      console.log(`[Adapter] Duration option ${target} clicked at (${oc.x}, ${oc.y})`)
+    } else {
+      console.log(`[Adapter] Duration option ${target} not found in dropdown`)
+    }
+    console.log(`[Adapter] Duration set to ${target}`)
+    await delay(300)
+  }
+
+  /** Seedance 2.0 可编辑输入框：点击聚焦 → 原生 setter 设值 → 派发 React 事件 */
+  private async selectDurationViaInput(duration: number): Promise<void> {
+    const wc = this.getWebContents()
+    const target = String(duration)
+
+    // Step 1: 点击 Duration 触发按钮，展开时长面板
+    // DOM: <button aria-label="Duration"><span class="durationTriggerText-...">5s</span></button>
+    const triggered: boolean = await wc.executeJavaScript(`
+      (function() {
+        var btn = document.querySelector('button[aria-label="Duration"]');
+        if (!btn || btn.offsetParent === null) {
+          var all = document.querySelectorAll('button');
+          for (var i = 0; i < all.length; i++) {
+            if ((all[i].getAttribute('aria-label') || '').toLowerCase() === 'duration') {
+              btn = all[i];
+              break;
+            }
+          }
+        }
+        if (!btn || btn.offsetParent === null) return false;
+        btn.click();
+        return true;
+      })()
+    `)
+
+    if (!triggered) {
+      console.log(`[Adapter] Seedance duration trigger not found, falling back to dropdown`)
+      await this.selectDurationFallback(duration)
+      return
+    }
+
+    console.log(`[Adapter] Seedance duration panel triggered`)
+
+    // 等待面板展开 + Slider 渲染
+    await delay(600)
+
+    // Step 2: 直接在 Radix Slider 轨道上点击对应秒数的位置
+    // Slider: role="slider" aria-valuemin="4" aria-valuemax="15" aria-valuenow="14"
+    // 不依赖 input 输入框，直接操作 slider（Runway 的主要时长控件）
+    const success: boolean = await wc.executeJavaScript(`
+      (function() {
+        var target = ${duration};
+        var slider = document.querySelector('[role="slider"]');
+        if (!slider || slider.offsetParent === null) return false;
+
+        var min = parseInt(slider.getAttribute('aria-valuemin')) || 4;
+        var max = parseInt(slider.getAttribute('aria-valuemax')) || 15;
+        var clamped = Math.max(min, Math.min(max, target));
+        var percent = (clamped - min) / (max - min);
+
+        // 在 Slider 轨道上找到可点击的区域（Track 或 Root）
+        var track = slider.closest('[class*="Slider__Root"]') ||
+                    slider.closest('[class*="Slider__Track"]') ||
+                    slider.parentElement;
+        if (!track) return false;
+
+        var rect = track.getBoundingClientRect();
+        var x = rect.left + rect.width * percent;
+        var y = rect.top + rect.height / 2;
+
+        // Radix Slider 响应 pointer 事件（非 mouse 事件）
+        ['pointerdown', 'pointerup'].forEach(function(type) {
+          track.dispatchEvent(new PointerEvent(type, {
+            clientX: x, clientY: y, bubbles: true, cancelable: true,
+            pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0
+          }));
+        });
+
+        // 验证：读取 aria-valuenow 确认值已更新
+        var newVal = parseInt(slider.getAttribute('aria-valuenow')) || 0;
+        return newVal === clamped;
+      })()
+    `)
+
+    console.log(`[Adapter] Seedance duration set to ${target}s (success=${success})`)
+
+    if (!success) {
+      console.log(`[Adapter] Seedance duration slider failed, falling back to dropdown`)
+      await this.selectDurationFallback(duration)
+    }
+
+    // Step 3: 关闭 Duration 面板（否则会遮挡后续的 prompt 输入和图片上传）
+    // Radix Popover 通过监听 document pointerdown 来检测点击外部并关闭
+    await wc.executeJavaScript(`
+      (function() {
+        // 策略 A: 再次点击 Duration 按钮，利用 toggle 行为关闭面板
+        var btn = document.querySelector('button[aria-label="Duration"]');
+        if (btn && btn.offsetParent !== null) {
+          btn.click();
+          return;
+        }
+      })()
+    `)
+    await delay(150)
+
+    // 兜底：模拟点击面板外部，触发 Radix DismissableLayer
+    await wc.executeJavaScript(`
+      (function() {
+        // 在 body 左上角派发 pointerdown（远离 popover 区域），
+        // Radix 的 onInteractOutside 会捕获并关闭 popover
+        document.body.dispatchEvent(new PointerEvent('pointerdown', {
+          clientX: 1, clientY: 1, bubbles: true, cancelable: true,
+          pointerId: 99, pointerType: 'mouse', isPrimary: true, button: 0
+        }));
+        document.body.dispatchEvent(new PointerEvent('pointerup', {
+          clientX: 1, clientY: 1, bubbles: true, cancelable: true,
+          pointerId: 99, pointerType: 'mouse', isPrimary: true, button: 0
+        }));
+      })()
+    `)
+    await delay(200)
+  }
+
+  /** 兜底：当 Seedance input 模式找不到输入框时，走原下拉逻辑 */
+  private async selectDurationFallback(duration: number): Promise<void> {
+    const wc = this.getWebContents()
+    const target = `${duration}s`
+
+    let clicked: boolean = await wc.executeJavaScript(clickValueChipByTextJS(target))
+    if (!clicked) {
+      clicked = await wc.executeJavaScript(clickSettingByLabelJS('Duration'))
+    }
+    if (!clicked) {
+      console.log(`[Adapter] Duration fallback: control not found for ${target}`)
+      return
+    }
+
+    await delay(800)
+    const optionCoords: string = await wc.executeJavaScript(`
+      (function() {
+        var dur = ${duration};
+        var patterns = [dur + 's', dur + ' sec', dur + ' seconds', String(dur)];
+        var containers = document.querySelectorAll(
+          '[role="listbox"], [role="menu"], ' +
+          '[class*="popover"], [class*="Popover"], [class*="dropdown"], [class*="Dropdown"], ' +
+          '[class*="menu"], [class*="Menu"], [class*="panel"], [class*="Panel"]'
+        );
+        var roots = containers.length > 0 ? containers : [document.body];
+        for (var c = 0; c < roots.length; c++) {
+          if (roots[c].offsetParent === null && roots[c] !== document.body) continue;
+          var items = roots[c].querySelectorAll('*');
+          for (var i = 0; i < items.length; i++) {
+            if (items[i].offsetParent === null) continue;
+            var t = (items[i].textContent || '').trim().toLowerCase();
+            for (var p = 0; p < patterns.length; p++) {
+              if (t === patterns[p]) {
+                var r = items[i].getBoundingClientRect();
+                return JSON.stringify({ x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) });
+              }
+            }
+          }
+        }
+        return null;
+      })()
+    `)
+    if (optionCoords) {
+      const oc = JSON.parse(optionCoords)
+      const p1 = jitterPoint(oc.x, oc.y)
+      const p2 = jitterPoint(oc.x, oc.y)
+      wc.sendInputEvent({ type: 'mouseDown', x: p1.x, y: p1.y, button: 'left', clickCount: 1 })
+      await humanClickGap()
+      wc.sendInputEvent({ type: 'mouseUp', x: p2.x, y: p2.y, button: 'left', clickCount: 1 })
+      console.log(`[Adapter] Duration fallback: ${target} clicked via OS event`)
+    }
+    await delay(300)
+  }
+
+  /** 选择视频分辨率。策略同 selectDuration。 */
+  async selectResolution(resolution: string): Promise<void> {
+    const wc = this.getWebContents()
+
+    // 1. 直接点击当前值
+    let clicked: boolean = await wc.executeJavaScript(clickValueChipByTextJS(resolution))
+    if (!clicked) {
+      // 2. 通过 Resolution 标签定位
+      clicked = await wc.executeJavaScript(clickSettingByLabelJS('Resolution'))
+      if (!clicked) {
+        // 3. 兜底：查找页面上可能的 resolution 控制
+        clicked = await wc.executeJavaScript(`
+          (function() {
+            var all = document.querySelectorAll('button, [role="button"], [role="combobox"]');
+            for (var i = 0; i < all.length; i++) {
+              var t = (all[i].textContent || '').trim();
+              if (/^(480p|720p|1080p|2K|4K)$/i.test(t) && all[i].offsetParent !== null) {
+                all[i].click();
+                return true;
+              }
+            }
+            return false;
+          })()
+        `)
+        if (!clicked) {
+          console.log(`[Adapter] Resolution control not found for ${resolution}, skipping`)
+          return
+        }
+      }
+    }
+
+    // 等下拉展开，用 OS 级点击选项
+    await delay(800)
+    const optionCoords: string = await wc.executeJavaScript(`
+      (function() {
+        var target = ${JSON.stringify(resolution)};
+        var containers = document.querySelectorAll(
+          '[role="listbox"], [role="menu"], ' +
+          '[class*="popover"], [class*="Popover"], [class*="dropdown"], [class*="Dropdown"], ' +
+          '[class*="menu"], [class*="Menu"], [class*="panel"], [class*="Panel"]'
+        );
+        var searchRoots = containers.length > 0 ? containers : [document.body];
+        for (var c = 0; c < searchRoots.length; c++) {
+          if (searchRoots[c].offsetParent === null && searchRoots[c] !== document.body) continue;
+          var items = searchRoots[c].querySelectorAll('*');
+          for (var i = 0; i < items.length; i++) {
+            var el = items[i];
+            if (el.offsetParent === null) continue;
+            if ((el.textContent || '').trim() === target) {
+              var r = el.getBoundingClientRect();
+              return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+            }
+          }
+        }
+        return null;
+      })()
+    `)
+    if (optionCoords) {
+      const oc = JSON.parse(optionCoords)
+      const p1 = jitterPoint(oc.x, oc.y)
+      const p2 = jitterPoint(oc.x, oc.y)
+      wc.sendInputEvent({ type: 'mouseDown', x: p1.x, y: p1.y, button: 'left', clickCount: 1 })
+      await humanClickGap()
+      wc.sendInputEvent({ type: 'mouseUp', x: p2.x, y: p2.y, button: 'left', clickCount: 1 })
+    }
+    console.log(`[Adapter] Resolution set to ${resolution}`)
+    await delay(300)
+  }
+
+  /** 选择画面比例。策略同 selectDuration。 */
+  async selectAspectRatio(ratio: string): Promise<void> {
+    const wc = this.getWebContents()
+
+    // 1. 直接点击当前值
+    let clicked: boolean = await wc.executeJavaScript(clickValueChipByTextJS(ratio))
+    if (!clicked) {
+      // 2. 通过 "Aspect ratio" 标签定位
+      clicked = await wc.executeJavaScript(clickSettingByLabelJS('Aspect ratio'))
+      if (!clicked) {
+        // 3. 兜底：查找比例格式的值
+        clicked = await wc.executeJavaScript(`
+          (function() {
+            var all = document.querySelectorAll('button, [role="button"], [role="combobox"]');
+            for (var i = 0; i < all.length; i++) {
+              var t = (all[i].textContent || '').trim();
+              if (/^\\d+:\\d+$/.test(t) && all[i].offsetParent !== null) {
+                all[i].click();
+                return true;
+              }
+            }
+            return false;
+          })()
+        `)
+        if (!clicked) {
+          console.log(`[Adapter] Aspect ratio control not found for ${ratio}, skipping`)
+          return
+        }
+      }
+    }
+
+    // 等下拉展开，用 OS 级点击选项
+    await delay(800)
+    const optionCoords: string = await wc.executeJavaScript(`
+      (function() {
+        var target = ${JSON.stringify(ratio)};
+        var containers = document.querySelectorAll(
+          '[role="listbox"], [role="menu"], ' +
+          '[class*="popover"], [class*="Popover"], [class*="dropdown"], [class*="Dropdown"], ' +
+          '[class*="menu"], [class*="Menu"], [class*="panel"], [class*="Panel"]'
+        );
+        var searchRoots = containers.length > 0 ? containers : [document.body];
+        for (var c = 0; c < searchRoots.length; c++) {
+          if (searchRoots[c].offsetParent === null && searchRoots[c] !== document.body) continue;
+          var items = searchRoots[c].querySelectorAll('*');
+          for (var i = 0; i < items.length; i++) {
+            var el = items[i];
+            if (el.offsetParent === null) continue;
+            if ((el.textContent || '').trim() === target) {
+              var r = el.getBoundingClientRect();
+              return JSON.stringify({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+            }
+          }
+        }
+        return null;
+      })()
+    `)
+    if (optionCoords) {
+      const oc = JSON.parse(optionCoords)
+      const p1 = jitterPoint(oc.x, oc.y)
+      const p2 = jitterPoint(oc.x, oc.y)
+      wc.sendInputEvent({ type: 'mouseDown', x: p1.x, y: p1.y, button: 'left', clickCount: 1 })
+      await humanClickGap()
+      wc.sendInputEvent({ type: 'mouseUp', x: p2.x, y: p2.y, button: 'left', clickCount: 1 })
+    }
+    console.log(`[Adapter] Aspect ratio set to ${ratio}`)
+    await delay(300)
+  }
+
+  async submitOnly(taskId: string, modelId: string, prompt: string, imagePaths?: string[], duration?: number, resolution?: string, aspectRatio?: string): Promise<void> {
     // 防超发保护（worker loop 已做槽位检查，此处在极端竞态下兜底）
     if (this.runwaySlots >= this.MAX_SLOTS) {
       throw new Error(`Runway slots full (${this.runwaySlots}/${this.MAX_SLOTS}) — task should have been queued`)
@@ -435,15 +987,27 @@ export class RunwayAdapter implements IRunwayAdapter {
           this.currentModel = modelId
         }
 
-        // 3. 上传参考图（如有）
+        // 3. 配置视频参数（时长/分辨率/比例）
+        if (duration !== undefined) {
+          await this.selectDuration(duration)
+        }
+        if (resolution !== undefined) {
+          await this.selectResolution(resolution)
+        }
+        if (aspectRatio !== undefined) {
+          await this.selectAspectRatio(aspectRatio)
+        }
+
+        // 4. 填充提示词（先于图片上传，避免图片上传后 DOM 状态变化干扰）
+        await this.fillPrompt(prompt)
+        console.log('[Adapter] submitOnly: fillPrompt done, calling uploadRefs...')
+
+        // 5. 上传参考图（如有）
         if (imagePaths && imagePaths.length > 0) {
           await this.uploadReferenceImages(imagePaths, modelId)
         }
 
-        // 4. 填充提示词
-        await this.fillPrompt(prompt)
-
-        // 5. 点击生成（内部含 session 配置逻辑）
+        // 6. 点击生成（内部含 session 配置逻辑）
         await this.clickGenerate()
 
         // 重置页面状态，下一个任务会在 resetPage 中 reload 页面
@@ -476,6 +1040,7 @@ export class RunwayAdapter implements IRunwayAdapter {
    */
   async startPersistentMonitor(): Promise<void> {
     if (this.monitorActive) return
+    if (!this.browserView) return // BrowserView 已被销毁，无需 monitor
     if (this.monitorStarting) {
       console.log('[Adapter.Monitor] Startup already in progress, waiting...')
       await this.monitorStarting
@@ -552,11 +1117,18 @@ export class RunwayAdapter implements IRunwayAdapter {
   }
 
   stopPersistentMonitor(): void {
+    this.cancelCdpDetach()
     this.monitorActive = false
     this.monitorStarting = null
+    this.monitorReconnectAttempts = 0
     if (this.monitorReconnectTimer) {
       clearTimeout(this.monitorReconnectTimer)
       this.monitorReconnectTimer = null
+    }
+    // BrowserView 可能已被 destroy（窗口关闭早于 before-quit）
+    if (!this.browserView) {
+      console.log('[Adapter.Monitor] BrowserView already destroyed, skip cleanup')
+      return
     }
     try {
       const wc = this.getWebContents()
@@ -566,6 +1138,50 @@ export class RunwayAdapter implements IRunwayAdapter {
         wc.debugger.detach()
       }
       console.log('[Adapter.Monitor] Stopped')
+    } catch { /* already detached */ }
+  }
+
+  /** 有新任务活跃时调用：取消闲置 detach 定时，确保 CDP attach */
+  notifyTaskActive(): void {
+    this.cancelCdpDetach()
+    if (!this.monitorActive) {
+      this.startPersistentMonitor().catch((err) => {
+        console.log('[Adapter.Monitor] notifyTaskActive start failed:', err)
+      })
+    }
+  }
+
+  /** 任务完成时调用：启动 30s CDP detach 倒计时 */
+  notifyTaskIdle(): void {
+    if (this.cdpIdleTimer) return // 已有定时
+    console.log(`[Adapter.Monitor] Scheduling CDP detach in ${CDP_IDLE_DETACH_MS / 1000}s`)
+    this.cdpIdleTimer = setTimeout(() => {
+      this.cdpIdleTimer = null
+      if (this.submittedTasks.size === 0) {
+        console.log('[Adapter.Monitor] Idle timeout, detaching CDP')
+        this._doDetach()
+      }
+    }, CDP_IDLE_DETACH_MS)
+  }
+
+  private cancelCdpDetach(): void {
+    if (this.cdpIdleTimer) {
+      clearTimeout(this.cdpIdleTimer)
+      this.cdpIdleTimer = null
+      console.log('[Adapter.Monitor] Cancelled idle detach')
+    }
+  }
+
+  /** 仅 detach CDP，不清理 listener（保留 reattach 能力） */
+  private _doDetach(): void {
+    this.monitorActive = false
+    if (!this.browserView) return
+    try {
+      const wc = this.getWebContents()
+      if (wc.debugger.isAttached()) {
+        wc.debugger.detach()
+        console.log('[Adapter.Monitor] CDP detached (idle)')
+      }
     } catch { /* already detached */ }
   }
 
@@ -657,14 +1273,16 @@ export class RunwayAdapter implements IRunwayAdapter {
     }
   }
 
+  private lastFailureTime = 0
+
   private async handleMonitorFailure(errorMsg: unknown): Promise<void> {
     if (this.submittedTasks.size === 0) return
     const now = Date.now()
-    if (now - this.lastCompletionTime < this.COMPLETION_COOLDOWN_MS) {
+    if (now - this.lastFailureTime < 3000) {
       console.log('[Adapter.Monitor] Skipping duplicate failure event (within cooldown)')
       return
     }
-    this.lastCompletionTime = now
+    this.lastFailureTime = now
 
     const taskId = await this.matchCompletionToTask()
     if (!taskId) return
@@ -738,9 +1356,9 @@ export class RunwayAdapter implements IRunwayAdapter {
           break
         }
         // UI 还没更新，等 1 秒重试
-        await new Promise((r) => setTimeout(r, 1000))
+        await delay(1000)
       } catch {
-        await new Promise((r) => setTimeout(r, 500))
+        await delay(500)
       }
     }
 
@@ -806,7 +1424,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     const promptFound = await this.waitForSelector(RUNWAY_SELECTORS.promptInput, 15_000)
     if (!promptFound) throw new Error('Page did not load properly after reset — prompt input missing')
 
-    await new Promise((r) => setTimeout(r, 1000))
+    await delay(1000)
 
     this.pageReady = true
     this.currentModel = ''
@@ -821,7 +1439,7 @@ export class RunwayAdapter implements IRunwayAdapter {
         `document.readyState === 'complete' && document.body !== null`,
       )
       if (ready) return
-      await new Promise((r) => setTimeout(r, 500))
+      await delay(500)
     }
   }
 
@@ -837,7 +1455,7 @@ export class RunwayAdapter implements IRunwayAdapter {
         `(function() { return !!document.querySelector(${JSON.stringify(selector)}); })()`,
       )
       if (found) return true
-      await new Promise((r) => setTimeout(r, 500))
+      await delay(500)
     }
     return false
   }
@@ -958,7 +1576,7 @@ export class RunwayAdapter implements IRunwayAdapter {
           )
 
           // 2. 等待下拉展开
-          await new Promise((r) => setTimeout(r, 1000))
+          await delay(1000)
 
           // 3. 诊断：导出下拉菜单中所有可见文本
           const dropdownOptions: string = await wc.executeJavaScript(
@@ -979,7 +1597,7 @@ export class RunwayAdapter implements IRunwayAdapter {
           console.log('[Adapter] All visible texts on page:', dropdownOptions)
 
           // 4. 通过显示名称匹配模型选项并点击
-          const displayName = MODEL_DISPLAY_NAMES[modelId] || modelId
+          const displayName = MODEL_CAPS[modelId]?.name || modelId
           const clicked: boolean = await wc.executeJavaScript(
             clickOptionByTextJS(displayName),
           )
@@ -995,7 +1613,7 @@ export class RunwayAdapter implements IRunwayAdapter {
             }
           }
 
-          await new Promise((r) => setTimeout(r, 500))
+          await delay(500)
         })(),
         ADAPTER_TIMEOUT,
         `selectModel(${modelId})`,
@@ -1009,137 +1627,105 @@ export class RunwayAdapter implements IRunwayAdapter {
 
       await withTimeout(
         (async () => {
-          // 找到 prompt 输入框，直接设置 textContent + 触发 React 事件
-          const success: boolean = await wc.executeJavaScript(
+          const promptSelector = RUNWAY_SELECTORS.promptInput
+          const diag: {
+            found: boolean
+            tag?: string
+            visible?: boolean
+            afterFillLen?: number
+            selIdx?: number
+            drilled?: boolean
+          } = await wc.executeJavaScript(
             `(function() {
-              // 优先匹配提示词输入框
-              var selectors = [
-                'textarea[placeholder*="Describe"]',
-                'textarea[placeholder*="describe"]',
-                'input[type="text"]',
-                'textarea',
-                '[contenteditable="true"]',
-              ];
+              var selList = ${JSON.stringify(promptSelector.split(/,\s*/))};
+              var text = ${JSON.stringify(prompt)};
+
+              // ── 第 1 步：查找元素 ──
               var el = null;
-              for (var i = 0; i < selectors.length; i++) {
-                el = document.querySelector(selectors[i]);
-                if (el && el.offsetParent !== null) break;
-                el = null;
+              var selIdx = -1;
+              for (var i = 0; i < selList.length; i++) {
+                var cand = document.querySelector(selList[i]);
+                if (cand) {
+                  el = cand;
+                  selIdx = i;
+                  break;
+                }
+              }
+              if (!el) return { found: false };
+
+              var tag = el.tagName;
+              var isInput = tag === 'TEXTAREA' || tag === 'INPUT';
+
+              // ── 钻取：如果不是 INPUT/TEXTAREA 且自身没有 contenteditable 属性 → 深入子节点找真正的 textbox ──
+              var drilled = false;
+              if (!isInput && el.getAttribute('contenteditable') !== 'true') {
+                var child = el.querySelector('[contenteditable="true"]');
+                if (child) {
+                  el = child;
+                  tag = el.tagName;
+                  isInput = tag === 'TEXTAREA' || tag === 'INPUT';
+                  drilled = true;
+                }
               }
 
-              if (!el) return false;
-
-              // 获取元素类型
-              var isContentEditable = el.getAttribute('contenteditable') === 'true' || el.isContentEditable;
-              var tagName = el.tagName;
+              var visible = el.offsetParent !== null;
+              if (!visible) return { found: true, tag: tag, visible: false, selIdx: selIdx, drilled: drilled };
 
               el.focus();
               el.click();
 
-              // ── 清除旧文本 ──
-              if (tagName === 'TEXTAREA' || tagName === 'INPUT') {
-                // 原生 input/textarea：使用原生 value setter 触发 React Fiber
-                var nativeSetter = Object.getOwnPropertyDescriptor(
-                  window.HTMLTextAreaElement.prototype, 'value'
-                ) || Object.getOwnPropertyDescriptor(
-                  window.HTMLInputElement.prototype, 'value'
-                );
-                if (nativeSetter && nativeSetter.set) {
-                  nativeSetter.set.call(el, '');
-                } else {
-                  el.value = '';
-                }
+              // ── 第 2 步：清空 ──
+              if (isInput) {
+                el.select();
+                var ns = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')
+                  || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+                if (ns && ns.set) { ns.set.call(el, ''); }
+                else { el.value = ''; }
               } else {
-                // contenteditable div：直接清空 textContent
-                el.textContent = '';
-                el.innerHTML = '';
+                // contenteditable: 全选后删除内容
+                var sel = window.getSelection();
+                if (sel && sel.rangeCount > 0) {
+                  var range = document.createRange();
+                  range.selectNodeContents(el);
+                  sel.removeAllRanges();
+                  sel.addRange(range);
+                }
+                document.execCommand('selectAll', false, null);
+                document.execCommand('delete', false, null);
               }
 
-              // ── 填充新文本 ──
-              if (tagName === 'TEXTAREA' || tagName === 'INPUT') {
-                var nativeSetter2 = Object.getOwnPropertyDescriptor(
-                  window.HTMLTextAreaElement.prototype, 'value'
-                ) || Object.getOwnPropertyDescriptor(
-                  window.HTMLInputElement.prototype, 'value'
-                );
-                if (nativeSetter2 && nativeSetter2.set) {
-                  nativeSetter2.set.call(el, ${JSON.stringify(prompt)});
-                } else {
-                  el.value = ${JSON.stringify(prompt)};
-                }
+              // ── 第 3 步：填充（使用 execCommand insertText，React 受控组件兼容） ──
+              if (isInput) {
+                var ns2 = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')
+                  || Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+                if (ns2 && ns2.set) { ns2.set.call(el, text); }
+                else { el.value = text; }
+                el.dispatchEvent(new Event('input', { bubbles: true }));
               } else {
-                // contenteditable div
-                el.textContent = ${JSON.stringify(prompt)};
+                document.execCommand('insertText', false, text);
               }
 
-              // ── 触发 React 事件链 ──
-              el.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-              el.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-              // React 16/17 需要 compositionend
-              el.dispatchEvent(new CompositionEvent('compositionend', {
-                data: ${JSON.stringify(prompt)}, bubbles: true
-              }));
+              // ── 第 4 步：触发 React 事件 ──
+              el.dispatchEvent(new Event('change', { bubbles: true }));
 
-              // 验证
-              var currentText = el.textContent || el.innerText || el.value || '';
-              var expected = ${JSON.stringify(prompt)};
-              return currentText.trim() === expected.trim();
+              var afterFillLen = (el.textContent || el.innerText || el.value || '').length;
+              return { found: true, tag: tag, visible: true, afterFillLen: afterFillLen, selIdx: selIdx, drilled: drilled };
             })()`,
           )
 
-          if (!success) {
-            // 回退方案1：剪贴板粘贴到 contenteditable
-            const fallbackOk: boolean = await wc.executeJavaScript(
-              `(function() {
-                var el = document.querySelector('[contenteditable="true"]');
-                if (!el || el.offsetParent === null) return false;
-                el.focus();
-                el.textContent = '';
-                el.innerHTML = '';
-                document.execCommand('insertText', false, ${JSON.stringify(prompt)});
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                var t = el.textContent || el.innerText || '';
-                return t.trim() === ${JSON.stringify(prompt)}.trim();
-              })()`,
-            )
-            if (!fallbackOk) {
-              // 回退方案2：广泛搜索任意可编辑元素
-              const wideOk: boolean = await wc.executeJavaScript(
-                `(function() {
-                  var els = document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"], [role="textbox"]');
-                  for (var i = 0; i < els.length; i++) {
-                    if (els[i].offsetParent === null) continue;
-                    var el = els[i];
-                    el.focus();
-                    el.click();
-                    try {
-                      if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-                        var ns = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value') ||
-                                 Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-                        if (ns && ns.set) { ns.set.call(el, ''); ns.set.call(el, ${JSON.stringify(prompt)}); }
-                        else { el.value = ''; el.value = ${JSON.stringify(prompt)}; }
-                      } else {
-                        el.textContent = '';
-                        el.innerHTML = '';
-                        el.textContent = ${JSON.stringify(prompt)};
-                      }
-                      el.dispatchEvent(new Event('input', { bubbles: true }));
-                      el.dispatchEvent(new Event('change', { bubbles: true }));
-                      var t = el.textContent || el.innerText || el.value || '';
-                      if (t.trim() === ${JSON.stringify(prompt)}.trim()) return true;
-                    } catch(e) { continue; }
-                  }
-                  return false;
-                })()`,
-              )
-              if (!wideOk) {
-                throw new Error('fillPrompt: all approaches failed')
-              }
-            }
-          }
+          console.log('[Adapter] fillPrompt diag:', JSON.stringify(diag))
 
-          // 等 React 处理完状态更新
-          await new Promise((r) => setTimeout(r, 800))
+          if (!diag.found) {
+            throw new Error('fillPrompt: prompt element not found in DOM')
+          }
+          if (!diag.visible) {
+            throw new Error(`fillPrompt: element <${diag.tag}> found but not visible (offsetParent=null)`)
+          }
+          if ((diag.afterFillLen ?? 0) <= 10) {
+            throw new Error(
+              `fillPrompt: text write failed — afterFill:${diag.afterFillLen} tag:<${diag.tag}> drilled:${diag.drilled}`,
+            )
+          }
         })(),
         ADAPTER_TIMEOUT,
         'fillPrompt',
@@ -1201,13 +1787,17 @@ export class RunwayAdapter implements IRunwayAdapter {
     if (dismissed > 0) {
       console.log(`[Adapter] Dismissed ${dismissed} blocking UI elements`)
       // 等待弹窗关闭动画
-      await new Promise((r) => setTimeout(r, 1000))
+      await delay(1000)
     }
     return dismissed
   }
 
   async clickGenerate(): Promise<void> {
     const wc = this.getWebContents()
+    console.log('[Adapter] clickGenerate: START')
+
+    // 等待页面在 fillPrompt 之后 settle（React 状态更新可能需要时间）
+    await delay(500)
 
       // 诊断：打印页面可见文本（仅在 debug 模式下执行）
       let visibleTexts = ''
@@ -1229,18 +1819,11 @@ export class RunwayAdapter implements IRunwayAdapter {
 
       // ── 1. 配置 session/folder（Runway 要求先选保存位置才能生成）──
       const needSessionSetup: boolean = await wc.executeJavaScript(`
-        // ADD DIAGNOSTIC
         (function() {
-          var all = document.querySelectorAll('*');
-          for (var i = 0; i < all.length; i++) {
-            var t = (all[i].textContent || '').trim();
-            if (t === 'Select where your generations will be saved.' && all[i].offsetParent !== null) {
-              return true;
-            }
-          }
-          return false;
+          return (document.body.innerText || '').indexOf('Select where your generations will be saved.') !== -1;
         })()
       `)
+      console.log('[Adapter] clickGenerate: needSessionSetup =', needSessionSetup)
 
       if (needSessionSetup) {
         if (ADAPTER_DEBUG) {
@@ -1276,7 +1859,7 @@ export class RunwayAdapter implements IRunwayAdapter {
         console.log('[Adapter] folderContainer click:', containerClicked)
 
         if (containerClicked) {
-          await new Promise((r) => setTimeout(r, 2000))
+          await delay(2000)
 
           // 步骤 B: 在弹出层中找 "Change folder" 并点击（仅在 popover 内搜索，不触动主页面的）
           const cfClicked: boolean = await wc.executeJavaScript(`
@@ -1305,7 +1888,7 @@ export class RunwayAdapter implements IRunwayAdapter {
           console.log('[Adapter] Change folder in popover click:', cfClicked)
 
           if (cfClicked) {
-            await new Promise((r) => setTimeout(r, 2000))
+            await delay(2000)
 
             if (ADAPTER_DEBUG) {
               const afterCfTexts: string = await wc.executeJavaScript(`
@@ -1368,17 +1951,19 @@ export class RunwayAdapter implements IRunwayAdapter {
 
             if (folderCoords) {
               const fc = JSON.parse(folderCoords)
-              wc.sendInputEvent({ type: 'mouseDown', x: fc.x, y: fc.y, button: 'left', clickCount: 1 })
-              await new Promise((r) => setTimeout(r, 80))
-              wc.sendInputEvent({ type: 'mouseUp', x: fc.x, y: fc.y, button: 'left', clickCount: 1 })
-              await new Promise((r) => setTimeout(r, 500))
+              const f1 = jitterPoint(fc.x, fc.y)
+              const f2 = jitterPoint(fc.x, fc.y)
+              wc.sendInputEvent({ type: 'mouseDown', x: f1.x, y: f1.y, button: 'left', clickCount: 1 })
+              await humanClickGap()
+              wc.sendInputEvent({ type: 'mouseUp', x: f2.x, y: f2.y, button: 'left', clickCount: 1 })
+              await delay(500)
               console.log('[Adapter] Sent OS click to Private Assets at', fc)
             } else {
               console.log('[Adapter] Could not find Private Assets coords')
             }
 
             // 步骤 D: 用 sendInputEvent 点击 Select 按钮
-            await new Promise((r) => setTimeout(r, 500))
+            await delay(500)
             const selectCoords: string = await wc.executeJavaScript(`
               (function() {
                 var btns = document.querySelectorAll('button, [role="button"]');
@@ -1399,9 +1984,11 @@ export class RunwayAdapter implements IRunwayAdapter {
             if (selectCoords) {
               const sc = JSON.parse(selectCoords)
               if (!sc.disabled) {
-                wc.sendInputEvent({ type: 'mouseDown', x: sc.x, y: sc.y, button: 'left', clickCount: 1 })
-                await new Promise((r) => setTimeout(r, 80))
-                wc.sendInputEvent({ type: 'mouseUp', x: sc.x, y: sc.y, button: 'left', clickCount: 1 })
+                const s1 = jitterPoint(sc.x, sc.y)
+                const s2 = jitterPoint(sc.x, sc.y)
+                wc.sendInputEvent({ type: 'mouseDown', x: s1.x, y: s1.y, button: 'left', clickCount: 1 })
+                await humanClickGap()
+                wc.sendInputEvent({ type: 'mouseUp', x: s2.x, y: s2.y, button: 'left', clickCount: 1 })
                 console.log('[Adapter] Sent OS click to Select button at', sc)
                 sessionOk = true
               } else {
@@ -1413,11 +2000,11 @@ export class RunwayAdapter implements IRunwayAdapter {
           }
         }
 
-        await new Promise((r) => setTimeout(r, 1000))
+        await delay(1000)
         const dismissedAll = await this.dismissDialogs()
         console.log('[Adapter] Dismissed', dismissedAll, 'dialogs after folder config')
 
-        await new Promise((r) => setTimeout(r, 500))
+        await delay(500)
 
         if (sessionOk) {
           console.log('[Adapter] Session configured successfully')
@@ -1427,7 +2014,8 @@ export class RunwayAdapter implements IRunwayAdapter {
       }
 
       // ── 2. 清除阻塞弹窗 ──
-      await this.dismissDialogs()
+      const preDismissed = await this.dismissDialogs()
+      console.log('[Adapter] clickGenerate: pre-dismissDialogs cleared', preDismissed, 'dialogs')
       // ── 3. 查找 Generate 按钮 ──
       const btnInfo = await wc.executeJavaScript(`(function() {
         var candidates = [];
@@ -1452,7 +2040,12 @@ export class RunwayAdapter implements IRunwayAdapter {
       })()`)
       console.log('[Adapter] Generate button candidates:', btnInfo)
 
-      const candidates: Array<{ text: string; x: number; y: number; w: number; h: number; disabled: boolean; visible: boolean; tag: string }> = JSON.parse(btnInfo)
+      let candidates: Array<{ text: string; x: number; y: number; w: number; h: number; disabled: boolean; visible: boolean; tag: string }>
+      try {
+        candidates = JSON.parse(btnInfo)
+      } catch {
+        throw new Error(`Generate button detection failed. Raw response: ${btnInfo}`)
+      }
 
       let rect = candidates.find(c => c.text === 'Generate' && c.visible && !c.disabled)
       if (!rect) {
@@ -1466,15 +2059,19 @@ export class RunwayAdapter implements IRunwayAdapter {
         throw new Error(`Generate button not found. Candidates: ${btnInfo}`)
       }
 
-      console.log(`[Adapter] Clicking Generate "${rect.text}" at (${rect.x}, ${rect.y})`)
+      console.log(`[Adapter] clickGenerate: Clicking Generate "${rect.text}" at (${rect.x}, ${rect.y})`)
 
-      // 发送 OS 级鼠标点击（sendInputEvent 生成真实 OS 事件）
-      wc.sendInputEvent({ type: 'mouseDown', x: rect.x, y: rect.y, button: 'left', clickCount: 1 })
-      await new Promise((r) => setTimeout(r, 80))
-      wc.sendInputEvent({ type: 'mouseUp', x: rect.x, y: rect.y, button: 'left', clickCount: 1 })
+      // 发送 OS 级鼠标点击（坐标加噪声模拟真人微动）
+      const g1 = jitterPoint(rect.x, rect.y)
+      const g2 = jitterPoint(rect.x, rect.y)
+      console.log('[Adapter] clickGenerate: sending OS mouse events...')
+      wc.sendInputEvent({ type: 'mouseDown', x: g1.x, y: g1.y, button: 'left', clickCount: 1 })
+      await humanClickGap()
+      wc.sendInputEvent({ type: 'mouseUp', x: g2.x, y: g2.y, button: 'left', clickCount: 1 })
+      console.log('[Adapter] clickGenerate: OS mouse events sent')
 
       // JS MouseEvent 兜底（Runway 是 React SPA，合成事件有时需要 JS 级事件）
-      await new Promise((r) => setTimeout(r, 200))
+      await delay(200)
       await wc.executeJavaScript(`
         (function() {
           var btns = document.querySelectorAll('button, [role="button"]');
@@ -1487,18 +2084,17 @@ export class RunwayAdapter implements IRunwayAdapter {
                 clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
                 button: 0
               }));
-              btns[i].click();
               return;
             }
           }
         })()
       `)
-      console.log('[Adapter] Generate button clicked (OS + JS)')
-
+      console.log('[Adapter] clickGenerate: JS click dispatched, dismissing post-click dialogs...')
       // 关闭点击后弹出的对话框（如有）
-      await new Promise((r) => setTimeout(r, 1000))
+      await delay(1000)
       const dismissed = await this.dismissDialogs()
       if (dismissed > 0) console.log(`[Adapter] Dismissed ${dismissed} post-click dialogs`)
+      console.log('[Adapter] clickGenerate: DONE')
   }
 
   /**

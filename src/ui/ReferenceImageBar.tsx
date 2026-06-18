@@ -1,18 +1,22 @@
-import React from 'react'
+import { useState } from 'react'
 import type { Material } from '../types/materials'
 
 interface ReferenceImageBarProps {
   images: Material[]
+  maxCount?: number
   onRemove: (id: string) => void
   onAdd: () => void
+  onOpenPicker?: () => void
 }
 
 const ReferenceImageBar: React.FC<ReferenceImageBarProps> = ({
   images,
+  maxCount = 5,
   onRemove,
   onAdd,
+  onOpenPicker,
 }) => {
-  const [previewId, setPreviewId] = React.useState<string | null>(null)
+  const [previewId, setPreviewId] = useState<string | null>(null)
 
   const previewImage = previewId
     ? images.find((img) => img.id === previewId)
@@ -21,7 +25,7 @@ const ReferenceImageBar: React.FC<ReferenceImageBarProps> = ({
   return (
     <div style={styles.container}>
       <div style={styles.label}>
-        参考图（{images.length}/5，拖拽图片到此处添加）:
+        参考图（{images.length}/{maxCount}，拖拽图片到此处添加）:
       </div>
       <div style={styles.thumbnails}>
         {images.map((img) => (
@@ -46,9 +50,20 @@ const ReferenceImageBar: React.FC<ReferenceImageBarProps> = ({
             </div>
           </div>
         ))}
-        {images.length < 5 && (
-          <button onClick={onAdd} style={styles.addBtn} title="添加参考图">
+        {images.length < maxCount && (
+          <button className="ref-add-btn" onClick={onAdd} style={styles.addBtn} title="添加参考图">
             +
+          </button>
+        )}
+        {onOpenPicker && (
+          <button
+            className="ref-picker-btn"
+            onClick={onOpenPicker}
+            style={styles.pickerBtn}
+            title="从素材库选择"
+          >
+            <span style={styles.pickerIcon}>⊞</span>
+            <span>素材库</span>
           </button>
         )}
       </div>
@@ -76,20 +91,21 @@ const ReferenceImageBar: React.FC<ReferenceImageBarProps> = ({
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    marginTop: 8,
-    padding: '8px 10px',
-    background: '#f9f9f9',
-    borderRadius: 4,
-    border: '1px solid #e0e0e0',
+    marginTop: 'var(--space-3)',
+    padding: 'var(--space-3) var(--space-4)',
+    background: 'var(--color-bg)',
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--color-border-light)',
   },
   label: {
-    fontSize: 11,
-    color: '#888',
-    marginBottom: 6,
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-muted)',
+    marginBottom: 'var(--space-2)',
+    fontWeight: 500,
   },
   thumbnails: {
     display: 'flex',
-    gap: 6,
+    gap: 'var(--space-2)',
     flexWrap: 'wrap',
     alignItems: 'center',
   },
@@ -97,11 +113,12 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'relative' as const,
     width: 64,
     height: 64,
-    borderRadius: 4,
+    borderRadius: 'var(--radius-md)',
     overflow: 'hidden',
-    border: '2px solid #e0e0e0',
-    background: '#fff',
+    border: '2px solid var(--color-border-light)',
+    background: 'var(--color-surface)',
     flexShrink: 0,
+    transition: 'border-color var(--transition-fast)',
   },
   thumbnail: {
     width: '100%',
@@ -115,7 +132,7 @@ const styles: Record<string, React.CSSProperties> = {
     right: 0,
     width: 18,
     height: 18,
-    background: 'rgba(217, 83, 79, 0.85)',
+    background: 'rgba(196, 85, 77, 0.88)',
     color: '#fff',
     border: 'none',
     borderRadius: '50%',
@@ -127,7 +144,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   fileName: {
     fontSize: 9,
-    color: '#666',
+    color: 'var(--color-text-secondary)',
     textAlign: 'center' as const,
     marginTop: 1,
     overflow: 'hidden',
@@ -135,19 +152,41 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'nowrap' as const,
     maxWidth: 64,
   },
+  pickerBtn: {
+    width: 64,
+    height: 64,
+    borderRadius: 'var(--radius-md)',
+    border: '2px dashed var(--color-border)',
+    background: 'var(--color-surface-hover)',
+    cursor: 'pointer',
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-muted)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    flexShrink: 0,
+    transition: 'border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast)',
+  },
+  pickerIcon: {
+    fontSize: 16,
+    lineHeight: '1',
+  },
   addBtn: {
     width: 64,
     height: 64,
-    borderRadius: 4,
-    border: '2px dashed #ccc',
-    background: '#f5f5f5',
+    borderRadius: 'var(--radius-md)',
+    border: '2px dashed var(--color-border)',
+    background: 'var(--color-surface-hover)',
     cursor: 'pointer',
     fontSize: 24,
-    color: '#999',
+    color: 'var(--color-text-muted)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
+    transition: 'border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast)',
   },
   lightbox: {
     position: 'fixed' as const,
@@ -155,30 +194,35 @@ const styles: Record<string, React.CSSProperties> = {
     left: 0,
     right: 0,
     bottom: 0,
-    background: 'rgba(0,0,0,0.85)',
-    zIndex: 9999,
+    background: 'rgba(26, 29, 35, 0.92)',
+    zIndex: 2000,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
+    backdropFilter: 'blur(4px)',
   },
   lightboxImg: {
     maxWidth: '90%',
     maxHeight: '90%',
     objectFit: 'contain' as const,
     cursor: 'default',
+    borderRadius: 'var(--radius-md)',
+    boxShadow: 'var(--shadow-overlay)',
   },
   lightboxClose: {
     position: 'absolute' as const,
     top: 20,
     right: 20,
-    padding: '8px 16px',
-    background: 'rgba(255,255,255,0.2)',
+    padding: '8px 18px',
+    background: 'rgba(255,255,255,0.12)',
     color: '#fff',
-    border: '1px solid rgba(255,255,255,0.3)',
-    borderRadius: 4,
+    border: '1px solid rgba(255,255,255,0.2)',
+    borderRadius: 'var(--radius-md)',
     cursor: 'pointer',
     fontSize: 14,
+    fontWeight: 500,
+    backdropFilter: 'blur(8px)',
   },
 }
 

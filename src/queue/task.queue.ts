@@ -2,12 +2,16 @@ import { v4 as uuidv4 } from 'uuid'
 import { databaseConnection } from '../database/connection'
 import { materialStore } from '../database/material.store'
 import type { Task, TaskStatus, TaskPriority, CreateTaskParams } from '../types/tasks'
+import { runwayAdapter } from '../adapters/runway.adapter'
 
 export type TaskProcessor = (taskId: string) => Promise<void>
 
 interface CreateParams extends CreateTaskParams {
   priority?: TaskPriority
   note?: string
+  duration?: number
+  resolution?: string
+  aspectRatio?: string
 }
 
 /** Runway 同一时间最多支持 2 个并发生成（回退默认值，实际由 RunwayAdapter 控制） */
@@ -49,12 +53,28 @@ export class TaskQueue {
       retryCount: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      duration: params.duration,
+      resolution: params.resolution,
+      aspectRatio: params.aspectRatio,
     }
 
     db.prepare(
-      `INSERT INTO tasks (id, prompt, model_id, status, priority, note, retry_count, created_at, updated_at)
-       VALUES (@id, @prompt, @modelId, @status, @priority, @note, @retryCount, @createdAt, @updatedAt)`,
-    ).run(task)
+      `INSERT INTO tasks (id, prompt, model_id, status, priority, note, retry_count, created_at, updated_at, duration, resolution, aspect_ratio)
+       VALUES (@id, @prompt, @modelId, @status, @priority, @note, @retryCount, @createdAt, @updatedAt, @duration, @resolution, @aspectRatio)`,
+    ).run({
+      id: task.id,
+      prompt: task.prompt,
+      modelId: task.modelId,
+      status: task.status,
+      priority: task.priority,
+      note: task.note,
+      retryCount: task.retryCount,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      duration: task.duration ?? null,
+      resolution: task.resolution ?? null,
+      aspectRatio: task.aspectRatio ?? null,
+    })
 
     // 绑定参考图
     if (params.materialIds && params.materialIds.length > 0) {
@@ -80,11 +100,11 @@ export class TaskQueue {
     let rows: Record<string, unknown>[]
     if (status) {
       rows = db
-        .prepare('SELECT * FROM tasks WHERE status = ? ORDER BY created_at ASC')
+        .prepare('SELECT * FROM tasks WHERE status = ? ORDER BY created_at ASC LIMIT 500')
         .all(status) as Record<string, unknown>[]
     } else {
       rows = db
-        .prepare('SELECT * FROM tasks ORDER BY created_at ASC')
+        .prepare('SELECT * FROM tasks ORDER BY created_at ASC LIMIT 500')
         .all() as Record<string, unknown>[]
     }
     return rows.map((r) => this.rowToTask(r))
@@ -194,6 +214,8 @@ export class TaskQueue {
 
         console.log(`[Queue] Task started: ${taskId.slice(0, 8)} (${task.modelId}) [Runway slots: ${this.getAvailableSlots?.() ?? '?'}/${MAX_RUNWAY_SLOTS}, local running: ${this.runningTaskIds.size}]`)
 
+        runwayAdapter.notifyTaskActive()
+
         // 不 await — 让任务在后台提交
         this.processor(taskId)
           .then(() => {
@@ -209,6 +231,9 @@ export class TaskQueue {
           })
           .finally(() => {
             this.runningTaskIds.delete(taskId)
+            if (this.runningTaskIds.size === 0) {
+              runwayAdapter.notifyTaskIdle()
+            }
           })
 
         // 短暂延迟防止同次循环内重复拾取
@@ -247,6 +272,9 @@ export class TaskQueue {
       updatedAt: row.updated_at as number,
       result: row.result as string | undefined,
       error: row.error as string | undefined,
+      duration: row.duration as number | undefined,
+      resolution: row.resolution as string | undefined,
+      aspectRatio: row.aspect_ratio as string | undefined,
     }
   }
 }

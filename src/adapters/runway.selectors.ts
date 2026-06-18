@@ -13,8 +13,9 @@ export const RUNWAY_SELECTORS = {
   modelDropdown: '[data-testid="select-base-model"]',
 
   // ── Prompt 输入 ──
-  /** 主提示词输入框（支持 textarea / contenteditable / input） */
-  promptInput: 'textarea, [contenteditable="true"], input[type="text"]',
+  /** 主提示词输入框（支持 textarea / contenteditable / input，含 Runway Seedance 特定选择器） */
+  /** 顺序重要：contenteditable 和 textbox class 优先，aria-label/placeholder 只匹配 wrapper 时靠钻取逻辑兜底 */
+  promptInput: '[contenteditable="true"][class*="textbox"], [contenteditable="true"][aria-label*="Prompt"], [contenteditable="true"][aria-label*="prompt"], [contenteditable="true"], [aria-label*="Prompt"], [aria-label*="prompt"], [placeholder*="Describe"], [placeholder*="describe"]',
 
   // ── 生成按钮 ──
   /** 生成按钮 — 通过文本内容查找，不依赖 hash class */
@@ -46,19 +47,6 @@ export const MAX_WAIT_TIME = 5 * 60 * 1000
 
 // ── 工具函数（在 executeJavaScript 中使用） ──
 
-/** 通过可见文本查找按钮的 JS 代码片段 */
-export function findButtonByTextJS(text: string): string {
-  return `(function() {
-    const btns = document.querySelectorAll('button, [role="button"]');
-    for (const btn of btns) {
-      if (btn.offsetParent !== null && (btn.textContent || '').trim() === ${JSON.stringify(text)}) {
-        return true;
-      }
-    }
-    return false;
-  })()`
-}
-
 /** 点击可见文本匹配的按钮的 JS 代码片段
  *  跳过 disabled 按钮，使用 MouseEvent 确保 React 能捕获 */
 export function clickButtonByTextJS(text: string): string {
@@ -76,6 +64,94 @@ export function clickButtonByTextJS(text: string): string {
         }));
         // 兼容兜底：原生 click 也触发一次
         btn.click();
+        return true;
+      }
+    }
+    return false;
+  })()`
+}
+
+// ── 视频参数选择 ──
+
+/** 通过标签文本（如 "Duration"、"Resolution"、"Aspect ratio"）查找设置行中的值按钮并点击 */
+export function clickSettingByLabelJS(label: string): string {
+  return `(function() {
+    var lower = ${JSON.stringify(label.toLowerCase())};
+    var all = document.querySelectorAll('*');
+    // 第一遍：找包含标签文本的可见元素（如 "Duration" 标签）
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.offsetParent === null) continue;
+      if (el.children.length > 0) continue;
+      var t = (el.textContent || '').trim().toLowerCase();
+      if (t === lower) {
+        // 找到标签后，在附近查找可点击的值元素（同级的按钮或下拉触发器）
+        var parent = el.parentElement;
+        if (!parent) continue;
+        // 先在父级内找按钮
+        var btns = parent.querySelectorAll('button, [role="button"], [role="combobox"], [aria-haspopup], select');
+        for (var j = 0; j < btns.length; j++) {
+          if (btns[j].offsetParent !== null) {
+            btns[j].click();
+            return true;
+          }
+        }
+        // 在父级兄弟中找
+        var siblings = parent.parentElement ? parent.parentElement.children : [];
+        for (var k = 0; k < siblings.length; k++) {
+          var sibBtns = siblings[k].querySelectorAll('button, [role="button"], [role="combobox"], [aria-haspopup], select');
+          for (var m = 0; m < sibBtns.length; m++) {
+            if (sibBtns[m].offsetParent !== null) {
+              sibBtns[m].click();
+              return true;
+            }
+          }
+        }
+      }
+    }
+    // 第二遍：用标签文本的一部分匹配（如 "Duration" 可能嵌套在 span 中）
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.offsetParent === null) continue;
+      var t = (el.textContent || '').trim().toLowerCase();
+      if (t.indexOf(lower) >= 0 && t.length < 50 && el.children.length <= 1) {
+        var region = el.closest('[class*="row"], [class*="Row"], [class*="control"], [class*="Control"], [class*="field"], [class*="Field"], [class*="group"], [class*="Group"]');
+        var searchRoot = region || el.parentElement;
+        if (!searchRoot) continue;
+        var btns = searchRoot.querySelectorAll('button, [role="button"], [role="combobox"], [aria-haspopup], select');
+        for (var j = 0; j < btns.length; j++) {
+          if (btns[j].offsetParent !== null && btns[j] !== el) {
+            btns[j].click();
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  })()`
+}
+
+/** 通过值文本（如 "5s"、"720p"、"16:9"）查找并点击对应的触发器 */
+export function clickValueChipByTextJS(text: string): string {
+  return `(function() {
+    var target = ${JSON.stringify(text)};
+    var lower = target.toLowerCase();
+    var all = document.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (el.offsetParent === null) continue;
+      if (el.children.length > 0) continue;
+      var t = (el.textContent || '').trim();
+      if (t.toLowerCase() === lower) {
+        // 检查是否可点击（button/role）或父级可点击
+        if (el.tagName === 'BUTTON' || el.getAttribute('role') === 'button' || el.onclick) {
+          el.click();
+          return true;
+        }
+        var btn = el.closest('button, [role="button"], [role="combobox"]');
+        if (btn) { btn.click(); return true; }
+        // 直接 click 作为兜底
+        el.click();
         return true;
       }
     }

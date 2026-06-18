@@ -1,0 +1,60 @@
+{
+  "name": "canvas",
+  "version": "0.1.0",
+  "description": "Canvas — AI 视频创作工作台",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "pack": "npm run build && electron-builder --win portable",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "build": {
+    "appId": "com.canvas.app",
+    "productName": "Canvas",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "Canvas-${version}.exe"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**"
+    ]
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "electron-log": "^5.2.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/ui": "^4.1.8",
+    "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^2.3.0",
+    "jsdom": "^28.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.0",
+    "vitest": "^4.1.8"
+  }
+}

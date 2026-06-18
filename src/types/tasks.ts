@@ -17,6 +17,12 @@ export interface Task {
   updatedAt: number
   result?: string
   error?: string
+  /** 视频时长（秒） */
+  duration?: number
+  /** 视频分辨率 */
+  resolution?: string
+  /** 画面比例 */
+  aspectRatio?: string
 }
 
 /** 创建任务的参数 */
@@ -25,6 +31,12 @@ export interface CreateTaskParams {
   modelId: string
   /** 关联的参考图 Material ID 列表 */
   materialIds?: string[]
+  /** 视频时长（秒） */
+  duration?: number
+  /** 视频分辨率 */
+  resolution?: string
+  /** 画面比例 */
+  aspectRatio?: string
 }
 
 /** 任务队列接口 */

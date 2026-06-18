@@ -42,10 +42,11 @@ describe('ReferenceImageBar', () => {
     expect(screen.getAllByRole('img').length).toBe(2)
   })
 
-  it('shows add button when fewer than 5 images', () => {
+  it('shows add button when fewer than maxCount images', () => {
     render(
       <ReferenceImageBar
         images={mockImages}
+        maxCount={5}
         onRemove={vi.fn()}
         onAdd={vi.fn()}
       />
@@ -53,7 +54,7 @@ describe('ReferenceImageBar', () => {
     expect(screen.getByText('+')).toBeDefined()
   })
 
-  it('hides add button when 5 images', () => {
+  it('hides add button when images equal maxCount', () => {
     const fiveImages = Array.from({ length: 5 }, (_, i) => ({
       ...mockImages[0],
       id: `img-${i}`,
@@ -62,6 +63,41 @@ describe('ReferenceImageBar', () => {
     render(
       <ReferenceImageBar
         images={fiveImages}
+        maxCount={5}
+        onRemove={vi.fn()}
+        onAdd={vi.fn()}
+      />
+    )
+    expect(screen.queryByText('+')).toBeNull()
+  })
+
+  it('shows add button when images fewer than maxCount=9', () => {
+    const sixImages = Array.from({ length: 6 }, (_, i) => ({
+      ...mockImages[0],
+      id: `img-${i}`,
+      fileName: `image-${i}.png`,
+    }))
+    render(
+      <ReferenceImageBar
+        images={sixImages}
+        maxCount={9}
+        onRemove={vi.fn()}
+        onAdd={vi.fn()}
+      />
+    )
+    expect(screen.getByText('+')).toBeDefined()
+  })
+
+  it('hides add button when 9 images with maxCount=9', () => {
+    const nineImages = Array.from({ length: 9 }, (_, i) => ({
+      ...mockImages[0],
+      id: `img-${i}`,
+      fileName: `image-${i}.png`,
+    }))
+    render(
+      <ReferenceImageBar
+        images={nineImages}
+        maxCount={9}
         onRemove={vi.fn()}
         onAdd={vi.fn()}
       />
@@ -114,6 +150,7 @@ describe('ReferenceImageBar', () => {
     render(
       <ReferenceImageBar
         images={mockImages}
+        maxCount={5}
         onRemove={vi.fn()}
         onAdd={vi.fn()}
       />
@@ -125,10 +162,23 @@ describe('ReferenceImageBar', () => {
     render(
       <ReferenceImageBar
         images={[]}
+        maxCount={5}
         onRemove={vi.fn()}
         onAdd={vi.fn()}
       />
     )
     expect(screen.getByText(/参考图（0\/5/)).toBeDefined()
+  })
+
+  it('displays maxCount=9 in label for Seedance models', () => {
+    render(
+      <ReferenceImageBar
+        images={mockImages}
+        maxCount={9}
+        onRemove={vi.fn()}
+        onAdd={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/参考图（2\/9/)).toBeDefined()
   })
 })
