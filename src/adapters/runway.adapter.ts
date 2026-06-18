@@ -79,10 +79,10 @@ class AsyncLock {
   async acquire(taskId: string): Promise<void> {
     if (!this.locked) {
       this.locked = true
-      console.log(`[Adapter.Lock] Acquired by ${taskId}`)
+      logger.info('Adapter', `[Adapter.Lock] Acquired by ${taskId}`)
       return
     }
-    console.log(`[Adapter.Lock] ${taskId} waiting for lock...`)
+    logger.info('Adapter', `[Adapter.Lock] ${taskId} waiting for lock...`)
     return new Promise((resolve) => {
       this.queue.push({ resolve, taskId })
     })
@@ -91,11 +91,11 @@ class AsyncLock {
   release(taskId: string): void {
     if (this.queue.length > 0) {
       const next = this.queue.shift()!
-      console.log(`[Adapter.Lock] Released by ${taskId}, passing to ${next.taskId}`)
+      logger.info('Adapter', `[Adapter.Lock] Released by ${taskId}, passing to ${next.taskId}`)
       next.resolve()
     } else {
       this.locked = false
-      console.log(`[Adapter.Lock] Released by ${taskId}, lock free`)
+      logger.info('Adapter', `[Adapter.Lock] Released by ${taskId}, lock free`)
     }
   }
 
@@ -283,7 +283,7 @@ export class RunwayAdapter implements IRunwayAdapter {
         }
 
         // 诊断：打印全部 imagePaths 顺序（检查 DB 返回顺序是否正确）
-        console.log(`[Adapter] Seedance upload: imagePaths order = [${imagePaths.map(p => p.split(/[/\\\\]/).pop()).join(', ')}]`)
+        logger.info('Adapter', `[Adapter] Seedance upload: imagePaths order = [${imagePaths.map(p => p.split(/[/\\\\]/).pop()).join(', ')}]`)
 
         // 诊断：打印当前页面上的空槽位和已填充槽位的布局
         const slotLayout: string = await wc.executeJavaScript(`
@@ -316,11 +316,11 @@ export class RunwayAdapter implements IRunwayAdapter {
             return JSON.stringify(result);
           })()
         `)
-        console.log(`[Adapter] Seedance slot layout: ${slotLayout}`)
+        logger.info('Adapter', `[Adapter] Seedance slot layout: ${slotLayout}`)
 
         for (let i = 0; i < imagePaths.length; i++) {
           const filePath = imagePaths[i]
-          console.log(`[Adapter] Seedance ref ${i + 1}/${imagePaths.length}: ${filePath}`)
+          logger.info('Adapter', `[Adapter] Seedance ref ${i + 1}/${imagePaths.length}: ${filePath}`)
 
           // Step 1: 找到空槽位，按视觉位置（左→右）排序，点击第 i 个
           let addRefRetries = 0
@@ -383,18 +383,18 @@ export class RunwayAdapter implements IRunwayAdapter {
               return 'CLICKED:' + slotIdx + ' left=' + Math.round(r.left);
             })()
           `)
-          console.log(`[Adapter] Seedance click: ${clickResult}`)
+          logger.info('Adapter', `[Adapter] Seedance click: ${clickResult}`)
 
           // 如果点了 "+ References" 按钮，说明槽位不够，需要等待新槽出现后重试
           if (clickResult === 'ADD_REF_CLICKED') {
             addRefRetries++
             if (addRefRetries <= 3) {
-              console.log(`[Adapter] Seedance: new slot requested, retry ${addRefRetries}/3`)
+              logger.info('Adapter', `[Adapter] Seedance: new slot requested, retry ${addRefRetries}/3`)
               await delay(1500)
               i-- // 重试当前图片（循环末尾 i++ 会回到原索引）
               continue
             }
-            console.warn(`[Adapter] Seedance: add-ref retry limit exceeded, falling through`)
+            logger.warn('Adapter', `[Adapter] Seedance: add-ref retry limit exceeded, falling through`)
           }
 
           // 等待 DOM 更新（如果有新的 file input 出现）
@@ -417,20 +417,20 @@ export class RunwayAdapter implements IRunwayAdapter {
               files: [filePath],
               nodeId: targetNodeId,
             })
-            console.log(`[Adapter] Seedance CDP: file injected on node ${targetNodeId}`)
+            logger.info('Adapter', `[Adapter] Seedance CDP: file injected on node ${targetNodeId}`)
             // DOM.setFileInputFiles 触发原生 change 事件，不再手动 dispatch 避免重复
           } else {
-            console.warn(`[Adapter] Seedance: no file input found in DOM after click`)
+            logger.warn('Adapter', `[Adapter] Seedance: no file input found in DOM after click`)
           }
 
           // 随机间隔 4000-8000ms，等待 Runway React 完成上传→槽位状态变更，
           // 避免下一轮迭代时槽位状态未刷新导致顺序错乱
           const gap = 4000 + Math.floor(Math.random() * 4000)
-          console.log(`[Adapter] Seedance: waiting ${gap}ms before next image`)
+          logger.info('Adapter', `[Adapter] Seedance: waiting ${gap}ms before next image`)
           await delay(gap)
         }
       } catch (err) {
-        console.error('[Adapter] Seedance CDP upload error:', err)
+        logger.error('Adapter', '[Adapter] Seedance CDP upload error:', err)
       } finally {
         if (!wasAttached && dbg.isAttached()) {
           try { dbg.detach() } catch { /* ok */ }
@@ -466,7 +466,7 @@ export class RunwayAdapter implements IRunwayAdapter {
           // ── CDP 路径（精准，每次只注入一个 input）──
           for (let i = 0; i < imagePaths.length; i++) {
             const filePath = imagePaths[i]
-            console.log(`[Adapter] CDP uploading image ${i + 1}/${imagePaths.length}: ${filePath}`)
+            logger.info('Adapter', `[Adapter] CDP uploading image ${i + 1}/${imagePaths.length}: ${filePath}`)
 
             // 每个 input 可能对应一个参考图槽位，按顺序注入
             const targetIdx = Math.min(i, nodeIds.length - 1)
@@ -476,14 +476,14 @@ export class RunwayAdapter implements IRunwayAdapter {
               files: [filePath],
               nodeId: targetNodeId,
             })
-            console.log(`[Adapter] CDP: file injected on node ${targetNodeId}`)
+            logger.info('Adapter', `[Adapter] CDP: file injected on node ${targetNodeId}`)
             // DOM.setFileInputFiles 触发原生 change 事件，React 事件委托自动捕获，
             // 不再手动 dispatch 避免重复上传同一文件
             await delay(1000)
           }
         }
       } catch (err) {
-        console.error('[Adapter] CDP upload error for non-Seedance, falling back to DragEvent:', err)
+        logger.error('Adapter', '[Adapter] CDP upload error for non-Seedance, falling back to DragEvent:', err)
         useCDP = false
       } finally {
         if (needsAttach && dbg.isAttached()) {
@@ -495,7 +495,7 @@ export class RunwayAdapter implements IRunwayAdapter {
       if (!useCDP) {
         for (let i = 0; i < imagePaths.length; i++) {
           const filePath = imagePaths[i]
-          console.log(`[Adapter] DragEvent fallback image ${i + 1}/${imagePaths.length}: ${filePath}`)
+          logger.info('Adapter', `[Adapter] DragEvent fallback image ${i + 1}/${imagePaths.length}: ${filePath}`)
 
           const uploaded: boolean = await wc.executeJavaScript(`
             (function() {
@@ -555,14 +555,14 @@ export class RunwayAdapter implements IRunwayAdapter {
           `)
 
           if (!uploaded) {
-            console.warn(`[Adapter] Cannot upload image ${filePath} — Runway upload area not found in DOM`)
+            logger.warn('Adapter', `[Adapter] Cannot upload image ${filePath} — Runway upload area not found in DOM`)
           }
           await delay(1000)
         }
       }
     }
 
-    console.log(`[Adapter] Reference image upload complete: ${imagePaths.length} images`)
+    logger.info('Adapter', `[Adapter] Reference image upload complete: ${imagePaths.length} images`)
   }
 
   /** 选择视频时长。
@@ -600,7 +600,7 @@ export class RunwayAdapter implements IRunwayAdapter {
           })()
         `)
         if (!clicked) {
-          console.log(`[Adapter] Duration control not found for ${target}, skipping`)
+          logger.info('Adapter', `[Adapter] Duration control not found for ${target}, skipping`)
           return
         }
       }
@@ -632,7 +632,7 @@ export class RunwayAdapter implements IRunwayAdapter {
         return JSON.stringify([...new Set(texts)]);
       })()
     `)
-    console.log(`[Adapter] Duration dropdown visible texts for target="${target}":`, dropdownTexts)
+    logger.info('Adapter', `[Adapter] Duration dropdown visible texts for target="${target}":`, dropdownTexts)
 
     // 查找下拉中匹配选项的坐标，用 OS 级点击（React SPA 更可靠）
     // 匹配多种可能格式: "10s" / "10 sec" / "10 seconds" / "10"
@@ -672,11 +672,11 @@ export class RunwayAdapter implements IRunwayAdapter {
       wc.sendInputEvent({ type: 'mouseDown', x: p1.x, y: p1.y, button: 'left', clickCount: 1 })
       await humanClickGap()
       wc.sendInputEvent({ type: 'mouseUp', x: p2.x, y: p2.y, button: 'left', clickCount: 1 })
-      console.log(`[Adapter] Duration option ${target} clicked at (${oc.x}, ${oc.y})`)
+      logger.info('Adapter', `[Adapter] Duration option ${target} clicked at (${oc.x}, ${oc.y})`)
     } else {
-      console.log(`[Adapter] Duration option ${target} not found in dropdown`)
+      logger.info('Adapter', `[Adapter] Duration option ${target} not found in dropdown`)
     }
-    console.log(`[Adapter] Duration set to ${target}`)
+    logger.info('Adapter', `[Adapter] Duration set to ${target}`)
     await delay(300)
   }
 
@@ -706,12 +706,12 @@ export class RunwayAdapter implements IRunwayAdapter {
     `)
 
     if (!triggered) {
-      console.log(`[Adapter] Seedance duration trigger not found, falling back to dropdown`)
+      logger.info('Adapter', `[Adapter] Seedance duration trigger not found, falling back to dropdown`)
       await this.selectDurationFallback(duration)
       return
     }
 
-    console.log(`[Adapter] Seedance duration panel triggered`)
+    logger.info('Adapter', `[Adapter] Seedance duration panel triggered`)
 
     // 等待面板展开 + Slider 渲染
     await delay(600)
@@ -754,10 +754,10 @@ export class RunwayAdapter implements IRunwayAdapter {
       })()
     `)
 
-    console.log(`[Adapter] Seedance duration set to ${target}s (success=${success})`)
+    logger.info('Adapter', `[Adapter] Seedance duration set to ${target}s (success=${success})`)
 
     if (!success) {
-      console.log(`[Adapter] Seedance duration slider failed, falling back to dropdown`)
+      logger.info('Adapter', `[Adapter] Seedance duration slider failed, falling back to dropdown`)
       await this.selectDurationFallback(duration)
     }
 
@@ -803,7 +803,7 @@ export class RunwayAdapter implements IRunwayAdapter {
       clicked = await wc.executeJavaScript(clickSettingByLabelJS('Duration'))
     }
     if (!clicked) {
-      console.log(`[Adapter] Duration fallback: control not found for ${target}`)
+      logger.info('Adapter', `[Adapter] Duration fallback: control not found for ${target}`)
       return
     }
 
@@ -842,7 +842,7 @@ export class RunwayAdapter implements IRunwayAdapter {
       wc.sendInputEvent({ type: 'mouseDown', x: p1.x, y: p1.y, button: 'left', clickCount: 1 })
       await humanClickGap()
       wc.sendInputEvent({ type: 'mouseUp', x: p2.x, y: p2.y, button: 'left', clickCount: 1 })
-      console.log(`[Adapter] Duration fallback: ${target} clicked via OS event`)
+      logger.info('Adapter', `[Adapter] Duration fallback: ${target} clicked via OS event`)
     }
     await delay(300)
   }
@@ -872,7 +872,7 @@ export class RunwayAdapter implements IRunwayAdapter {
           })()
         `)
         if (!clicked) {
-          console.log(`[Adapter] Resolution control not found for ${resolution}, skipping`)
+          logger.info('Adapter', `[Adapter] Resolution control not found for ${resolution}, skipping`)
           return
         }
       }
@@ -912,7 +912,7 @@ export class RunwayAdapter implements IRunwayAdapter {
       await humanClickGap()
       wc.sendInputEvent({ type: 'mouseUp', x: p2.x, y: p2.y, button: 'left', clickCount: 1 })
     }
-    console.log(`[Adapter] Resolution set to ${resolution}`)
+    logger.info('Adapter', `[Adapter] Resolution set to ${resolution}`)
     await delay(300)
   }
 
@@ -941,7 +941,7 @@ export class RunwayAdapter implements IRunwayAdapter {
           })()
         `)
         if (!clicked) {
-          console.log(`[Adapter] Aspect ratio control not found for ${ratio}, skipping`)
+          logger.info('Adapter', `[Adapter] Aspect ratio control not found for ${ratio}, skipping`)
           return
         }
       }
@@ -981,7 +981,7 @@ export class RunwayAdapter implements IRunwayAdapter {
       await humanClickGap()
       wc.sendInputEvent({ type: 'mouseUp', x: p2.x, y: p2.y, button: 'left', clickCount: 1 })
     }
-    console.log(`[Adapter] Aspect ratio set to ${ratio}`)
+    logger.info('Adapter', `[Adapter] Aspect ratio set to ${ratio}`)
     await delay(300)
   }
 
@@ -1043,7 +1043,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     assignedSlot: number,
   ): Promise<void> {
     if (!this.monitorActive) {
-      console.log('[Adapter] CDP monitor not active, attempting restart...')
+      logger.info('Adapter', '[Adapter] CDP monitor not active, attempting restart...')
       await this.startPersistentMonitor()
       if (!this.monitorActive) {
         throw new Error('CDP monitor unavailable — cannot track generation completion')
@@ -1056,14 +1056,14 @@ export class RunwayAdapter implements IRunwayAdapter {
 
       // 1. 页面初始化（仅首次或 BrowserView 重建后）
       if (!this.pageReady) {
-        console.log('[Adapter] Page not ready, running resetPage...')
+        logger.info('Adapter', '[Adapter] Page not ready, running resetPage...')
         await this.resetPage()
         this.pageReady = true
       }
 
       // 2. 模型切换（仅在模型变化时）
       if (this.currentModel !== modelId) {
-        console.log(`[Adapter] Switching model: ${this.currentModel || 'none'} → ${modelId}`)
+        logger.info('Adapter', `[Adapter] Switching model: ${this.currentModel || 'none'} → ${modelId}`)
         await this.selectModel(modelId)
         this.currentModel = modelId
       }
@@ -1081,7 +1081,7 @@ export class RunwayAdapter implements IRunwayAdapter {
 
       // 4. 填充提示词（先于图片上传，避免图片上传后 DOM 状态变化干扰）
       await this.fillPrompt(prompt)
-      console.log('[Adapter] submitOnly: fillPrompt done, calling uploadRefs...')
+      logger.info('Adapter', '[Adapter] submitOnly: fillPrompt done, calling uploadRefs...')
 
       // 5. 上传参考图（如有）
       if (imagePaths && imagePaths.length > 0) {
@@ -1338,10 +1338,10 @@ export class RunwayAdapter implements IRunwayAdapter {
         if (/succeeded|completed|done|ready/i.test(taskStatus)) {
           const videoUrl = (data.video_url || data.url || data.output_url ||
             data.asset_url || data.result?.url || '') as string
-          console.log('[Adapter.Monitor] API completion:', taskStatus, videoUrl || '(no url)')
+          logger.info('Adapter', '[Adapter.Monitor] API completion:', taskStatus, videoUrl || '(no url)')
           await this.handleMonitorCompletion(videoUrl || undefined)
         } else if (/failed|error|cancelled/i.test(taskStatus)) {
-          console.log('[Adapter.Monitor] API failure:', taskStatus)
+          logger.info('Adapter', '[Adapter.Monitor] API failure:', taskStatus)
           await this.handleMonitorFailure(data.error || data.message || taskStatus)
         }
       } catch {
@@ -1358,20 +1358,20 @@ export class RunwayAdapter implements IRunwayAdapter {
       if (this.runwaySlots > 0) {
         this.freeOrphanedSlot('completed')
       }
-      console.log('[Adapter.Monitor] Completion detected but no active tasks')
+      logger.info('Adapter', '[Adapter.Monitor] Completion detected but no active tasks')
       return
     }
     // 去重：同一生成完成会触发视频加载 + API 响应两个 CDP 事件，冷却窗口内忽略重复
     const now = Date.now()
     if (now - this.lastCompletionTime < this.COMPLETION_COOLDOWN_MS) {
-      console.log('[Adapter.Monitor] Skipping duplicate completion event (within cooldown)')
+      logger.info('Adapter', '[Adapter.Monitor] Skipping duplicate completion event (within cooldown)')
       return
     }
     this.lastCompletionTime = now
 
     const taskId = await this.matchCompletionToTask()
     if (!taskId) {
-      console.log('[Adapter.Monitor] Could not match completion to any task')
+      logger.info('Adapter', '[Adapter.Monitor] Could not match completion to any task')
       return
     }
 
@@ -1406,7 +1406,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     }
     const now = Date.now()
     if (now - this.lastFailureTime < 3000) {
-      console.log('[Adapter.Monitor] Skipping duplicate failure event (within cooldown)')
+      logger.info('Adapter', '[Adapter.Monitor] Skipping duplicate failure event (within cooldown)')
       return
     }
     this.lastFailureTime = now
@@ -1526,7 +1526,7 @@ export class RunwayAdapter implements IRunwayAdapter {
 
     // 回退：FIFO — 更早提交的更可能先完成
     const sorted = entries.sort((a, b) => a[1].submittedAt - b[1].submittedAt)
-    console.log(`[Adapter.Monitor] 2 tasks active, FIFO fallback — matched ${sorted[0][0].slice(0, 8)}`)
+    logger.info('Adapter', `[Adapter.Monitor] 2 tasks active, FIFO fallback — matched ${sorted[0][0].slice(0, 8)}`)
     return sorted[0][0]
   }
 
@@ -1565,14 +1565,14 @@ export class RunwayAdapter implements IRunwayAdapter {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg.includes('ERR_ABORTED')) {
-          console.log('[Adapter] loadURL aborted (expected due to client-side redirect), continuing...')
+          logger.info('Adapter', '[Adapter] loadURL aborted (expected due to client-side redirect), continuing...')
         } else {
           throw err
         }
       }
       await this.waitForReady(15_000)
     } else {
-      console.log('[Adapter] Reloading page for clean state')
+      logger.info('Adapter', '[Adapter] Reloading page for clean state')
       wc.reload()
       await this.waitForReady(20_000)
     }
@@ -1754,7 +1754,7 @@ export class RunwayAdapter implements IRunwayAdapter {
               return JSON.stringify([...new Set(items)]);
             })()`,
           )
-          console.log('[Adapter] All visible texts on page:', dropdownOptions)
+          logger.info('Adapter', '[Adapter] All visible texts on page:', dropdownOptions)
 
           // 4. 通过显示名称匹配模型选项并点击
           const displayName = MODEL_CAPS[modelId]?.name || modelId
@@ -1873,7 +1873,7 @@ export class RunwayAdapter implements IRunwayAdapter {
             })()`,
           )
 
-          console.log('[Adapter] fillPrompt diag:', JSON.stringify(diag))
+          logger.info('Adapter', '[Adapter] fillPrompt diag:', JSON.stringify(diag))
 
           if (!diag.found) {
             throw new Error('fillPrompt: prompt element not found in DOM')
@@ -1945,7 +1945,7 @@ export class RunwayAdapter implements IRunwayAdapter {
     `)
 
     if (dismissed > 0) {
-      console.log(`[Adapter] Dismissed ${dismissed} blocking UI elements`)
+      logger.info('Adapter', `[Adapter] Dismissed ${dismissed} blocking UI elements`)
       // 等待弹窗关闭动画
       await delay(1000)
     }
@@ -1954,7 +1954,7 @@ export class RunwayAdapter implements IRunwayAdapter {
 
   async clickGenerate(): Promise<void> {
     const wc = this.getWebContents()
-    console.log('[Adapter] clickGenerate: START')
+    logger.info('Adapter', '[Adapter] clickGenerate: START')
 
     // 等待页面在 fillPrompt 之后 settle（React 状态更新可能需要时间）
     await delay(500)
@@ -1974,7 +1974,7 @@ export class RunwayAdapter implements IRunwayAdapter {
             return JSON.stringify([...new Set(texts)].slice(0, 50));
           })()
         `)
-        console.log('[Adapter] Page visible texts before click:', visibleTexts)
+        logger.info('Adapter', '[Adapter] Page visible texts before click:', visibleTexts)
       }
 
       // ── 1. 配置 session/folder（Runway 要求先选保存位置才能生成）──
@@ -1983,19 +1983,19 @@ export class RunwayAdapter implements IRunwayAdapter {
           return (document.body.innerText || '').indexOf('Select where your generations will be saved.') !== -1;
         })()
       `)
-      console.log('[Adapter] clickGenerate: needSessionSetup =', needSessionSetup)
+      logger.info('Adapter', '[Adapter] clickGenerate: needSessionSetup =', needSessionSetup)
 
       if (needSessionSetup) {
         if (ADAPTER_DEBUG) {
-          console.log('[Adapter] Session setup required — diagnosing session area...')
+          logger.info('Adapter', '[Adapter] Session setup required — diagnosing session area...')
           const sessionDiag = await this.diagnoseSessionArea()
-          console.log('[Adapter] Session area DOM:', sessionDiag)
+          logger.info('Adapter', '[Adapter] Session area DOM:', sessionDiag)
         }
 
         let sessionOk = false
 
         // 流程: folderContainer → popover中找 "Change folder" → 文件夹选择器 → 选文件夹 → Select
-        console.log('[Adapter] Configuring session folder...')
+        logger.info('Adapter', '[Adapter] Configuring session folder...')
 
         // 步骤 A: 点击 folderContainer 打开弹出层
         const containerClicked: boolean = await wc.executeJavaScript(`
@@ -2016,7 +2016,7 @@ export class RunwayAdapter implements IRunwayAdapter {
             return true;
           })()
         `)
-        console.log('[Adapter] folderContainer click:', containerClicked)
+        logger.info('Adapter', '[Adapter] folderContainer click:', containerClicked)
 
         if (containerClicked) {
           await delay(2000)
@@ -2045,7 +2045,7 @@ export class RunwayAdapter implements IRunwayAdapter {
               return false;
             })()
           `)
-          console.log('[Adapter] Change folder in popover click:', cfClicked)
+          logger.info('Adapter', '[Adapter] Change folder in popover click:', cfClicked)
 
           if (cfClicked) {
             await delay(2000)
@@ -2063,7 +2063,7 @@ export class RunwayAdapter implements IRunwayAdapter {
                   return JSON.stringify([...new Set(texts)].slice(0, 80));
                 })()
               `)
-              console.log('[Adapter] Texts after Change folder click:', afterCfTexts)
+              logger.info('Adapter', '[Adapter] Texts after Change folder click:', afterCfTexts)
 
               const afterCfElements: string = await wc.executeJavaScript(`
                 (function() {
@@ -2086,7 +2086,7 @@ export class RunwayAdapter implements IRunwayAdapter {
                   return JSON.stringify(items, null, 2);
                 })()
               `)
-              console.log('[Adapter] Folder-related elements after CF click:', afterCfElements)
+              logger.info('Adapter', '[Adapter] Folder-related elements after CF click:', afterCfElements)
             }
 
             // 步骤 C: 用 sendInputEvent (真实 OS 鼠标事件) 选择 "Private Assets" 文件夹
@@ -2107,7 +2107,7 @@ export class RunwayAdapter implements IRunwayAdapter {
                 return null;
               })()
             `)
-            console.log('[Adapter] Folder coords:', folderCoords)
+            logger.info('Adapter', '[Adapter] Folder coords:', folderCoords)
 
             if (folderCoords) {
               const fc = JSON.parse(folderCoords)
@@ -2117,9 +2117,9 @@ export class RunwayAdapter implements IRunwayAdapter {
               await humanClickGap()
               wc.sendInputEvent({ type: 'mouseUp', x: f2.x, y: f2.y, button: 'left', clickCount: 1 })
               await delay(500)
-              console.log('[Adapter] Sent OS click to Private Assets at', fc)
+              logger.info('Adapter', '[Adapter] Sent OS click to Private Assets at', fc)
             } else {
-              console.log('[Adapter] Could not find Private Assets coords')
+              logger.info('Adapter', '[Adapter] Could not find Private Assets coords')
             }
 
             // 步骤 D: 用 sendInputEvent 点击 Select 按钮
@@ -2139,7 +2139,7 @@ export class RunwayAdapter implements IRunwayAdapter {
                 return null;
               })()
             `)
-            console.log('[Adapter] Select button coords:', selectCoords)
+            logger.info('Adapter', '[Adapter] Select button coords:', selectCoords)
 
             if (selectCoords) {
               const sc = JSON.parse(selectCoords)
@@ -2149,33 +2149,33 @@ export class RunwayAdapter implements IRunwayAdapter {
                 wc.sendInputEvent({ type: 'mouseDown', x: s1.x, y: s1.y, button: 'left', clickCount: 1 })
                 await humanClickGap()
                 wc.sendInputEvent({ type: 'mouseUp', x: s2.x, y: s2.y, button: 'left', clickCount: 1 })
-                console.log('[Adapter] Sent OS click to Select button at', sc)
+                logger.info('Adapter', '[Adapter] Sent OS click to Select button at', sc)
                 sessionOk = true
               } else {
-                console.log('[Adapter] Select button is DISABLED — folder was not selected')
+                logger.info('Adapter', '[Adapter] Select button is DISABLED — folder was not selected')
               }
             } else {
-              console.log('[Adapter] Could not find Select button')
+              logger.info('Adapter', '[Adapter] Could not find Select button')
             }
           }
         }
 
         await delay(1000)
         const dismissedAll = await this.dismissDialogs()
-        console.log('[Adapter] Dismissed', dismissedAll, 'dialogs after folder config')
+        logger.info('Adapter', '[Adapter] Dismissed', dismissedAll, 'dialogs after folder config')
 
         await delay(500)
 
         if (sessionOk) {
-          console.log('[Adapter] Session configured successfully')
+          logger.info('Adapter', '[Adapter] Session configured successfully')
         } else {
-          console.log('[Adapter] WARNING: Session not configured — will try Generate anyway')
+          logger.info('Adapter', '[Adapter] WARNING: Session not configured — will try Generate anyway')
         }
       }
 
       // ── 2. 清除阻塞弹窗 ──
       const preDismissed = await this.dismissDialogs()
-      console.log('[Adapter] clickGenerate: pre-dismissDialogs cleared', preDismissed, 'dialogs')
+      logger.info('Adapter', '[Adapter] clickGenerate: pre-dismissDialogs cleared', preDismissed, 'dialogs')
       // ── 3. 查找 Generate 按钮 ──
       const btnInfo = await wc.executeJavaScript(`(function() {
         var candidates = [];
@@ -2198,7 +2198,7 @@ export class RunwayAdapter implements IRunwayAdapter {
         }
         return JSON.stringify(candidates);
       })()`)
-      console.log('[Adapter] Generate button candidates:', btnInfo)
+      logger.info('Adapter', '[Adapter] Generate button candidates:', btnInfo)
 
       let candidates: Array<{ text: string; x: number; y: number; w: number; h: number; disabled: boolean; visible: boolean; tag: string }>
       try {
@@ -2219,16 +2219,16 @@ export class RunwayAdapter implements IRunwayAdapter {
         throw new Error(`Generate button not found. Candidates: ${btnInfo}`)
       }
 
-      console.log(`[Adapter] clickGenerate: Clicking Generate "${rect.text}" at (${rect.x}, ${rect.y})`)
+      logger.info('Adapter', `[Adapter] clickGenerate: Clicking Generate "${rect.text}" at (${rect.x}, ${rect.y})`)
 
       // 发送 OS 级鼠标点击（坐标加噪声模拟真人微动）
       const g1 = jitterPoint(rect.x, rect.y)
       const g2 = jitterPoint(rect.x, rect.y)
-      console.log('[Adapter] clickGenerate: sending OS mouse events...')
+      logger.info('Adapter', '[Adapter] clickGenerate: sending OS mouse events...')
       wc.sendInputEvent({ type: 'mouseDown', x: g1.x, y: g1.y, button: 'left', clickCount: 1 })
       await humanClickGap()
       wc.sendInputEvent({ type: 'mouseUp', x: g2.x, y: g2.y, button: 'left', clickCount: 1 })
-      console.log('[Adapter] clickGenerate: OS mouse events sent')
+      logger.info('Adapter', '[Adapter] clickGenerate: OS mouse events sent')
 
       // JS MouseEvent 兜底（Runway 是 React SPA，合成事件有时需要 JS 级事件）
       await delay(200)
@@ -2249,12 +2249,12 @@ export class RunwayAdapter implements IRunwayAdapter {
           }
         })()
       `)
-      console.log('[Adapter] clickGenerate: JS click dispatched, dismissing post-click dialogs...')
+      logger.info('Adapter', '[Adapter] clickGenerate: JS click dispatched, dismissing post-click dialogs...')
       // 关闭点击后弹出的对话框（如有）
       await delay(1000)
       const dismissed = await this.dismissDialogs()
-      if (dismissed > 0) console.log(`[Adapter] Dismissed ${dismissed} post-click dialogs`)
-      console.log('[Adapter] clickGenerate: DONE')
+      if (dismissed > 0) logger.info('Adapter', `[Adapter] Dismissed ${dismissed} post-click dialogs`)
+      logger.info('Adapter', '[Adapter] clickGenerate: DONE')
   }
 
   /**
@@ -2313,14 +2313,14 @@ export class RunwayAdapter implements IRunwayAdapter {
         return await this.waitForNetworkResult(tid)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        console.log(`[Adapter] CDP attempt ${attempt + 1}/3 failed for ${tid}: ${msg}`)
+        logger.info('Adapter', `[Adapter] CDP attempt ${attempt + 1}/3 failed for ${tid}: ${msg}`)
         if (attempt < 2) {
           await new Promise((r) => setTimeout(r, CDP_RETRY_DELAY))
         }
       }
     }
     // CDP 不可用，回退到 DOM 轮询
-    console.log(`[Adapter] Falling back to DOM polling for ${tid}`)
+    logger.info('Adapter', `[Adapter] Falling back to DOM polling for ${tid}`)
     return this.waitForDomResult()
   }
 
@@ -2386,7 +2386,7 @@ export class RunwayAdapter implements IRunwayAdapter {
 
         // ── 信号 1：视频文件直接加载（最可靠） ──
         if (mimeType.startsWith('video/') || /\.(mp4|webm|mov)(\?|$)/i.test(url)) {
-          console.log(`[Adapter] CDP detected video asset for ${taskId}:`, url)
+          logger.info('Adapter', `[Adapter] CDP detected video asset for ${taskId}:`, url)
           resolved = true
           clearTimeout(timeout)
           clearInterval(domFallback)
@@ -2420,14 +2420,14 @@ export class RunwayAdapter implements IRunwayAdapter {
             if (/succeeded|completed|done|ready/i.test(taskStatus)) {
               const videoUrl = (data.video_url || data.url || data.output_url ||
                 data.asset_url || data.result?.url || '') as string
-              console.log(`[Adapter] CDP detected API completion for ${taskId}:`, taskStatus, videoUrl)
+              logger.info('Adapter', `[Adapter] CDP detected API completion for ${taskId}:`, taskStatus, videoUrl)
               resolved = true
               clearTimeout(timeout)
               clearInterval(domFallback)
               cleanup()
               resolve({ status: 'completed', videoUrl: videoUrl || undefined })
             } else if (/failed|error|cancelled/i.test(taskStatus)) {
-              console.log(`[Adapter] CDP detected API failure for ${taskId}:`, taskStatus)
+              logger.info('Adapter', `[Adapter] CDP detected API failure for ${taskId}:`, taskStatus)
               resolved = true
               clearTimeout(timeout)
               clearInterval(domFallback)
