@@ -113,3 +113,26 @@
   --panel-min-width: 200px;
   --divider-width: 4px;
 }
+
+/* ── Keyframe Animations ── */
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+@keyframes completeFlash {
+  0% { box-shadow: 0 0 0 0 var(--color-success); }
+  50% { box-shadow: 0 0 12px 2px var(--color-success); }
+  100% { box-shadow: 0 0 0 0 var(--color-success); }
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}

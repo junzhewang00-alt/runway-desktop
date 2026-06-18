@@ -1,8 +1,20 @@
 /* ── Component hover/active states — Glass Morphism ── */
 
+/* Task card — base transition + enter animation */
+.task-card {
+  transition: transform var(--transition-base), box-shadow var(--transition-base), border-color var(--transition-base);
+  animation: fadeInUp var(--transition-slow) ease both;
+}
+
+.task-card:nth-child(1) { animation-delay: 0ms; }
+.task-card:nth-child(2) { animation-delay: 40ms; }
+.task-card:nth-child(3) { animation-delay: 80ms; }
+.task-card:nth-child(4) { animation-delay: 120ms; }
+.task-card:nth-child(5) { animation-delay: 160ms; }
+
 /* Task card hover — glass lift */
 .task-card:hover {
-  transform: translateY(-1px);
+  transform: translateY(-2px) scale(1.01);
   box-shadow: var(--shadow-lg) !important;
   border-color: var(--color-accent-border) !important;
 }
@@ -12,8 +24,19 @@
 }
 
 /* History card hover */
+.history-card {
+  transition: transform var(--transition-base), box-shadow var(--transition-base);
+  animation: fadeInUp var(--transition-slow) ease both;
+}
+
+.history-card:nth-child(1) { animation-delay: 0ms; }
+.history-card:nth-child(2) { animation-delay: 40ms; }
+.history-card:nth-child(3) { animation-delay: 80ms; }
+.history-card:nth-child(4) { animation-delay: 120ms; }
+.history-card:nth-child(5) { animation-delay: 160ms; }
+
 .history-card:hover {
-  transform: translateY(-1px);
+  transform: translateY(-2px) scale(1.01);
   box-shadow: var(--shadow-lg) !important;
   border-color: var(--color-border-strong) !important;
 }
@@ -54,10 +77,16 @@ select:hover {
   border-color: var(--color-border-strong) !important;
 }
 
+/* Primary button — base transition */
+.btn-primary {
+  transition: background var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
 /* Primary button hover */
 .btn-primary:hover {
   background: var(--color-accent-hover) !important;
-  box-shadow: 0 2px 8px rgba(199, 125, 90, 0.2);
+  box-shadow: 0 2px 12px rgba(199, 125, 90, 0.25);
+  transform: scale(1.03);
 }
 
 .btn-primary:active {

@@ -215,12 +215,13 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 'var(--radius-sm)',
   },
   runningDot: {
-    width: 6,
-    height: 6,
+    width: 8,
+    height: 8,
     borderRadius: '50%',
-    background: 'var(--color-info)',
+    background: 'var(--color-accent)',
     flexShrink: 0,
-    animation: 'pulse 1.5s infinite',
+    animation: 'pulse 1.5s ease-in-out infinite',
+    boxShadow: '0 0 8px var(--color-accent-subtle)',
   },
   runningInfo: {
     flex: 1,
@@ -231,7 +232,7 @@ const styles: Record<string, React.CSSProperties> = {
   runningModel: {
     fontSize: 'var(--text-xs)',
     fontWeight: 600,
-    color: 'var(--color-info)',
+    color: 'var(--color-accent)',
   },
   runningPrompt: {
     fontSize: 'var(--text-xs)',
