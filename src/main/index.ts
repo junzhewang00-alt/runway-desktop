@@ -299,6 +299,18 @@ ipcMain.handle('models:list', withIpcTimeout(() => {
 
 // Sprint 11 - History
 ipcMain.handle('history:list', withIpcTimeout((_event, filter?: { modelId?: string; dateFrom?: number; dateTo?: number }) => {
+  if (filter?.modelId && !MODEL_CAPS[filter.modelId]) {
+    logger.warn('IPC', `history:list rejected — unknown model: ${filter.modelId}`)
+    return []
+  }
+  if (filter?.dateFrom !== undefined && typeof filter.dateFrom !== 'number') {
+    logger.warn('IPC', `history:list rejected — invalid dateFrom: ${filter.dateFrom}`)
+    return []
+  }
+  if (filter?.dateTo !== undefined && typeof filter.dateTo !== 'number') {
+    logger.warn('IPC', `history:list rejected — invalid dateTo: ${filter.dateTo}`)
+    return []
+  }
   return historyStore.list(filter)
 }))
 
