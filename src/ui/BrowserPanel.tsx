@@ -43,7 +43,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ onResetLayout }) => {
     window.electronAPI.session.isLoggedIn().then(setIsLoggedIn)
     const timer = setInterval(() => {
       window.electronAPI.session.isLoggedIn().then(setIsLoggedIn)
-    }, 5000)
+    }, 30_000)
     return () => clearInterval(timer)
   }, [])
 

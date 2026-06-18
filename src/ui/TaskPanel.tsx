@@ -101,7 +101,7 @@ const TaskPanel: React.FC = () => {
 
   const startPolling = () => {
     if (pollRef.current) return
-    pollRef.current = setInterval(loadTasks, 3000)
+    pollRef.current = setInterval(loadTasks, 5000)
   }
 
   useEffect(() => {

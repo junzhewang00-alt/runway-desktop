@@ -17,7 +17,7 @@ const QueueStatusPanel: React.FC = () => {
       window.electronAPI.queue.list().then(setTasks)
     }
     poll()
-    const timer = setInterval(poll, 2000)
+    const timer = setInterval(poll, 5000)
     return () => clearInterval(timer)
   }, [])
 
