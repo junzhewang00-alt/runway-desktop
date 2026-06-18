@@ -13,6 +13,7 @@ import { materialStore } from '../database/material.store'
 import { materialService } from '../services/material.service'
 import { databaseConnection } from '../database/connection'
 import type { TaskStatus } from '../types/tasks'
+import { MODEL_CAPS } from '../types/models'
 import { registerShortcuts, unregisterShortcuts } from './shortcuts'
 
 const isDev = !app.isPackaged
@@ -118,6 +119,112 @@ async function createWindow(): Promise<void> {
   })
 }
 
+// ──── Validation ────
+
+interface CreateTaskIPCParams {
+  prompt: string
+  modelId: string
+  priority?: string
+  note?: string
+  materialIds?: string[]
+  duration?: number
+  resolution?: string
+  aspectRatio?: string
+}
+
+interface ValidationErrors {
+  valid: false
+  errors: string[]
+}
+
+interface ValidationSuccess {
+  valid: true
+}
+
+type ValidationResult = ValidationSuccess | ValidationErrors
+
+/** 硬性上限：防止恶意超长 prompt 导致 executeJavaScript 截断或注入 */
+const HARD_PROMPT_LIMIT = 5000
+
+function validateCreateTaskParams(params: CreateTaskIPCParams): ValidationResult {
+  const errors: string[] = []
+
+  // 1. Validate prompt — non-empty, within bounds
+  if (typeof params.prompt !== 'string' || params.prompt.trim().length === 0) {
+    errors.push('Prompt is required and cannot be empty')
+  } else if (params.prompt.length > HARD_PROMPT_LIMIT) {
+    errors.push(
+      `Prompt exceeds hard limit of ${HARD_PROMPT_LIMIT} characters (received ${params.prompt.length})`,
+    )
+  }
+
+  // 2. Validate modelId — must exist in MODEL_CAPS
+  const modelCap = MODEL_CAPS[params.modelId]
+  if (!modelCap) {
+    const knownModels = Object.keys(MODEL_CAPS).join(', ')
+    errors.push(`Unknown model: "${params.modelId}". Available models: ${knownModels}`)
+    // Cannot validate model-specific constraints without a recognized model
+    return { valid: false, errors }
+  }
+
+  // 3. Validate prompt against model's maxPromptLength
+  if (params.prompt && params.prompt.length > modelCap.maxPromptLength) {
+    errors.push(
+      `Prompt length (${params.prompt.length}) exceeds ${modelCap.name} limit of ${modelCap.maxPromptLength} characters`,
+    )
+  }
+
+  // 4. Validate duration — must be a positive integer within model's allowed durations
+  if (params.duration !== undefined && params.duration !== null) {
+    if (
+      typeof params.duration !== 'number' ||
+      !Number.isInteger(params.duration) ||
+      params.duration <= 0
+    ) {
+      errors.push(`Duration must be a positive integer, received: ${params.duration}`)
+    } else if (!modelCap.durations.includes(params.duration)) {
+      errors.push(
+        `Duration ${params.duration}s is not supported by ${modelCap.name}. Allowed: ${modelCap.durations.join(', ')}s`,
+      )
+    }
+  }
+
+  // 5. Validate resolution — must be within model's allowed resolutions
+  if (
+    params.resolution !== undefined &&
+    params.resolution !== null &&
+    params.resolution !== ''
+  ) {
+    if (typeof params.resolution !== 'string') {
+      errors.push(`Resolution must be a string, received: ${typeof params.resolution}`)
+    } else if (!modelCap.resolutions.includes(params.resolution)) {
+      errors.push(
+        `Resolution "${params.resolution}" is not supported by ${modelCap.name}. Allowed: ${modelCap.resolutions.join(', ')}`,
+      )
+    }
+  }
+
+  // 6. Validate aspectRatio — must be within model's allowed aspect ratios
+  if (
+    params.aspectRatio !== undefined &&
+    params.aspectRatio !== null &&
+    params.aspectRatio !== ''
+  ) {
+    if (typeof params.aspectRatio !== 'string') {
+      errors.push(`Aspect ratio must be a string, received: ${typeof params.aspectRatio}`)
+    } else if (!modelCap.aspectRatios.includes(params.aspectRatio)) {
+      errors.push(
+        `Aspect ratio "${params.aspectRatio}" is not supported by ${modelCap.name}. Allowed: ${modelCap.aspectRatios.join(', ')}`,
+      )
+    }
+  }
+
+  if (errors.length > 0) {
+    return { valid: false, errors }
+  }
+  return { valid: true }
+}
+
 // ──── IPC Handlers ────
 
 // Sprint 2 - Browser
@@ -154,8 +261,15 @@ ipcMain.handle('session:clear', withIpcTimeout(async () => {
 }))
 
 // Sprint 5 - Queue
-ipcMain.handle('queue:create', withIpcTimeout((_event, params: { prompt: string; modelId: string; priority?: string; note?: string; materialIds?: string[]; duration?: number; resolution?: string; aspectRatio?: string }) => {
-  return taskQueue.create(params)
+ipcMain.handle('queue:create', withIpcTimeout((_event, params: CreateTaskIPCParams) => {
+  const validation = validateCreateTaskParams(params)
+  if (!validation.valid) {
+    logger.warn('IPC', `queue:create rejected: ${validation.errors.join('; ')}`)
+    return { success: false as const, errors: validation.errors }
+  }
+  const task = taskQueue.create(params)
+  logger.info('IPC', `queue:create accepted: ${task.id.slice(0, 8)} model=${params.modelId}`)
+  return { success: true as const, task }
 }))
 
 ipcMain.handle('queue:list', withIpcTimeout((_event, status?: TaskStatus) => {
