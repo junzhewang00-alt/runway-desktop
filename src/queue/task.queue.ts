@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid'
+const uuidv4 = (): string => crypto.randomUUID()
 import { databaseConnection } from '../database/connection'
 import { materialStore } from '../database/material.store'
 import type { Task, TaskStatus, TaskPriority, CreateTaskParams } from '../types/tasks'

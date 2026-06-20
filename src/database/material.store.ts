@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid'
+const uuidv4 = (): string => crypto.randomUUID()
 import { databaseConnection } from './connection'
 import type { Material, CreateMaterialParams } from '../types/materials'
 
