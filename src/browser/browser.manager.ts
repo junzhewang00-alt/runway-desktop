@@ -20,6 +20,7 @@ export class BrowserManager implements IBrowserManager {
   private initialBounds: { x: number; y: number; width: number; height: number } | undefined
   private onRebuild: ((bv: BrowserView) => void) | null = null
   private destroying = false
+  private savedBounds: { x: number; y: number; width: number; height: number } | null = null
   private onHostClosed: (() => void) | null = null
 
   static get RUNWAY_URL(): string {
@@ -126,16 +127,21 @@ export class BrowserManager implements IBrowserManager {
     this.browserView.setBounds({ x, y, width, height })
   }
 
-  /** 弹窗打开时降低 BrowserView 层级（替代 bounds 隐藏，避免闪烁和永久隐藏风险） */
+  /** 弹窗打开时移除 BrowserView（避免遮挡 React UI），关闭时恢复 */
   hide(): void {
     if (!this.browserView || !this.hostWindow) return
-    try { this.hostWindow.setTopBrowserView(null as unknown as BrowserView) } catch { /* 某些 Electron 版本不支持 */ }
+    this.savedBounds = this.browserView.getBounds()
+    ;(this.hostWindow.setBrowserView as (bv: BrowserView | null) => void)(null)
   }
 
-  /** 弹窗关闭时恢复 BrowserView 层级 */
+  /** 弹窗关闭时恢复 BrowserView */
   show(): void {
     if (!this.browserView || !this.hostWindow) return
-    try { this.hostWindow.setTopBrowserView(this.browserView) } catch { /* fallback */ }
+    this.hostWindow.setBrowserView(this.browserView)
+    if (this.savedBounds) {
+      this.browserView.setBounds(this.savedBounds)
+      this.savedBounds = null
+    }
   }
 
   destroy(): void {
