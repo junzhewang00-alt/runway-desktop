@@ -11,6 +11,7 @@ import { modelService } from '../services/model.service'
 import { historyStore } from '../database/history.store'
 import { materialStore } from '../database/material.store'
 import { materialService } from '../services/material.service'
+import { downloadManager } from '../download/download.manager'
 import { databaseConnection } from '../database/connection'
 import type { TaskStatus } from '../types/tasks'
 import { MODEL_CAPS } from '../types/models'
@@ -74,6 +75,9 @@ async function createWindow(): Promise<void> {
   // Sprint 5+6: Service 注入 Adapter + Logger
   generationService.setAdapter(runwayAdapter)
   generationService.setLogger(logger)
+
+  // Sprint 13: DownloadManager DI
+  downloadManager.setLogger(logger)
 
   // ── 注册 Monitor 回调（必须在 monitor 启动之前，避免漏掉早期事件）──
   runwayAdapter.setCompletionCallback((taskId, result) => {

@@ -8,6 +8,7 @@ import { materialStore } from '../database/material.store'
 import { MODEL_CAPS } from '../types/models'
 import type { IRunwayAdapter } from '../adapters/runway.adapter'
 import type { ILogger } from '../logs/logger'
+import { downloadManager } from '../download/download.manager'
 
 export interface IGenerationService {
   enqueueGeneration(params: CreateTaskParams): Promise<Task>
@@ -241,7 +242,7 @@ export class GenerationService implements IGenerationService {
 
       // 自动下载视频
       if (result.videoUrl) {
-        this.downloadVideo(task.id, result.videoUrl)
+        downloadManager.download(task.id, result.videoUrl)
       }
 
       // 桌面通知
