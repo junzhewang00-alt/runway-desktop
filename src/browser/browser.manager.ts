@@ -130,18 +130,22 @@ export class BrowserManager implements IBrowserManager {
   /** 弹窗打开时移除 BrowserView（避免遮挡 React UI），关闭时恢复 */
   hide(): void {
     if (!this.browserView || !this.hostWindow) return
-    this.savedBounds = this.browserView.getBounds()
-    ;(this.hostWindow.setBrowserView as (bv: BrowserView | null) => void)(null)
+    try {
+      this.savedBounds = this.browserView.getBounds()
+      this.hostWindow.removeBrowserView(this.browserView)
+    } catch { /* ignore */ }
   }
 
   /** 弹窗关闭时恢复 BrowserView */
   show(): void {
     if (!this.browserView || !this.hostWindow) return
-    this.hostWindow.setBrowserView(this.browserView)
-    if (this.savedBounds) {
-      this.browserView.setBounds(this.savedBounds)
-      this.savedBounds = null
-    }
+    try {
+      this.hostWindow.addBrowserView(this.browserView)
+      if (this.savedBounds) {
+        this.browserView.setBounds(this.savedBounds)
+        this.savedBounds = null
+      }
+    } catch { /* ignore */ }
   }
 
   destroy(): void {
