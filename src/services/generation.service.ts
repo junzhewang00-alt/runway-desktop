@@ -1,4 +1,4 @@
-import { app, net, Notification } from 'electron'
+import { app, net } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import type { Task, CreateTaskParams } from '../types/tasks'
@@ -9,6 +9,7 @@ import { MODEL_CAPS } from '../types/models'
 import type { IRunwayAdapter } from '../adapters/runway.adapter'
 import type { ILogger } from '../logs/logger'
 import { downloadManager } from '../download/download.manager'
+import { notificationService } from './notification.service'
 
 export interface IGenerationService {
   enqueueGeneration(params: CreateTaskParams): Promise<Task>
@@ -246,11 +247,8 @@ export class GenerationService implements IGenerationService {
       }
 
       // 桌面通知
-      try {
-        const modelName = modelCap?.name ?? task.modelId
-        const promptPreview = task.prompt.length > 60 ? task.prompt.slice(0, 60) + '...' : task.prompt
-        new Notification({ title: `生成完成 — ${modelName}`, body: promptPreview }).show()
-      } catch { /* 通知不可用 */ }
+      const promptPreview = task.prompt.length > 60 ? task.prompt.slice(0, 60) + '...' : task.prompt
+      notificationService.notifyTaskComplete(modelCap?.name ?? task.modelId, promptPreview)
     } else {
       // 自动重试：临时故障（Runway 服务端过载等）自动重新入队
       if (task.retryCount < GenerationService.MAX_AUTO_RETRIES) {
@@ -262,11 +260,9 @@ export class GenerationService implements IGenerationService {
         this.logger?.error('Service', `Task failed (retries exhausted): ${taskId} completedAt=${completedAt} reason=${result.error}`, taskId)
       }
 
-      try {
-        const modelCap = MODEL_CAPS[task.modelId]
-        const modelName = modelCap?.name ?? task.modelId
-        new Notification({ title: `生成失败 — ${modelName}`, body: result.error || '未知错误' }).show()
-      } catch { /* 通知不可用 */ }
+      const modelCap = MODEL_CAPS[task.modelId]
+      const modelName = modelCap?.name ?? task.modelId
+      notificationService.notifyTaskFailed(modelName, result.error || '未知错误')
     }
   }
 
