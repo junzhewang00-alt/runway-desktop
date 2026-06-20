@@ -13,27 +13,100 @@ export const RUNWAY_SELECTORS = {
   modelDropdown: '[data-testid="select-base-model"]',
 
   // ── Prompt 输入 ──
-  /** 主提示词输入框（支持 textarea / contenteditable / input，含 Runway Seedance 特定选择器） */
-  /** 顺序重要：contenteditable 和 textbox class 优先，aria-label/placeholder 只匹配 wrapper 时靠钻取逻辑兜底 */
+  /** 主提示词输入框 */
   promptInput: '[contenteditable="true"][class*="textbox"], [contenteditable="true"][aria-label*="Prompt"], [contenteditable="true"][aria-label*="prompt"], [contenteditable="true"], [aria-label*="Prompt"], [aria-label*="prompt"], [placeholder*="Describe"], [placeholder*="describe"]',
 
   // ── 生成按钮 ──
-  /** 生成按钮 — 通过文本内容查找，不依赖 hash class */
   generateButtonText: 'Generate',
 
   // ── 状态检测 ──
-  /** 生成状态容器 */
   statusContainer: '[data-testid*="generation"], [class*="progress"], [class*="status"]',
 
   // ── 参考图上传 ──
-  /** 首帧图 / 参考图上传区域 (WAN 2.6 / Gen-4) */
   firstFrameUpload: '[class*="FirstFrame"], [class*="first-frame"], [class*="upload"], [class*="Upload"], [data-testid*="upload"] input[type="file"]',
-  /** 文件上传隐藏 input */
   hiddenFileInput: 'input[type="file"]',
-  /** Seedance 2.0 Multi-reference 参考槽位 */
   seedanceReferenceSlot: '[class*="reference"], [class*="Reference"], [class*="slot"], [class*="upload-slot"]',
-  /** Seedance 2.0 "+ References" 按钮 */
   seedanceAddReference: '[class*="add"], [class*="Add"]',
+
+  // ── 槽位（并发管理）──
+  emptySlotContainer: 'div[class*="emptySlotContainer-"]',
+  slotButton: 'button[class*="slot-"][aria-label*="View IMG"]',
+  slotAny: '[class*="slot-"]',
+
+  // ── 上传区域 ──
+  uploadArea: '[class*="upload-area"], [class*="Upload"]',
+  dropZone: '[class*="dropzone"], [class*="DropZone"]',
+
+  // ── 视频参数控制 ──
+  /** Duration / Resolution / Aspect ratio 触发按钮 */
+  durationButton: 'button[aria-label="Duration"]',
+  sliderRoot: '[class*="Slider__Root"]',
+  sliderTrack: '[class*="Slider__Track"]',
+
+  // ── 下拉菜单通用 ──
+  /** 弹出菜单容器 */
+  dropdownContainer: [
+    '[role="listbox"]', '[role="menu"]',
+    '[class*="popover"]', '[class*="Popover"]',
+    '[class*="dropdown"]', '[class*="Dropdown"]',
+    '[class*="menu"]', '[class*="Menu"]',
+    '[class*="panel"]', '[class*="Panel"]',
+  ].join(', '),
+
+  // ── 会话/文件夹 ──
+  folderContainer: '.folderContainer-aV_LJB',
+
+  // ── CDP Monitor 完成检测 ──
+  /** 生成条目容器 */
+  generationItems: [
+    '[class*="Generation"]', '[class*="generation"]',
+    '[class*="AssetItem"]', '[class*="assetItem"]',
+    '[class*="HistoryItem"]', '[class*="historyItem"]',
+    '[data-testid*="generation"]', '[data-testid*="asset"]',
+  ].join(', '),
+  /** 视频/进度回退检测 */
+  videoProgressFallback: [
+    'video',
+    '[class*="progress"]', '[class*="Progress"]',
+    '[class*="status"]', '[class*="Status"]',
+    'progress', '[role="progressbar"]',
+  ].join(', '),
+
+  // ── 失败/错误检测 ──
+  errorIndicators: '[class*="error"], [class*="Error"], [class*="failed"]',
+
+  // ── 模态/弹窗/对话框 ──
+  modalOverlay: [
+    '[role="dialog"]', '[role="alertdialog"]',
+    '[class*="modal"]', '[class*="Modal"]',
+    '[class*="dialog"]', '[class*="Dialog"]',
+    '[class*="overlay"]', '[class*="Overlay"]',
+    '[class*="backdrop"]', '[class*="Backdrop"]',
+    '[class*="popup"]', '[class*="Popup"]',
+    '[class*="popover"]', '[class*="Popover"]',
+    '[class*="drawer"]', '[class*="Drawer"]',
+    '[class*="toast"]', '[class*="Toast"]',
+  ].join(', '),
+
+  /** 关闭/取消按钮 */
+  closeButtons: [
+    '[aria-label="Close"]', '[aria-label="close"]',
+    '[data-testid="close"]',
+    'button[class*="close"]', 'button[class*="Close"]',
+    'button[class*="Dismiss"]',
+  ].join(', '),
+
+  // ── 通用可点击元素 ──
+  /** 所有可点击按钮 */
+  clickableElements: 'button, [role="button"], a[role="button"], input[type="submit"], input[type="button"]',
+  /** 简单按钮（不含链接） */
+  buttons: 'button, [role="button"]',
+  /** 带链接的按钮 */
+  buttonsWithLinks: 'button, [role="button"], a',
+  /** 选项/菜单项 */
+  optionItems: '[role="option"], [role="menuitem"]',
+  /** 组合框触发器 */
+  comboboxTriggers: 'button, [role="button"], [role="combobox"]',
 } as const
 
 // ── Runway 团队配置 ──
