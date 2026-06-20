@@ -126,7 +126,7 @@ const MaterialPicker: React.FC<MaterialPickerProps> = ({
         const ext = '.' + f.name.split('.').pop()?.toLowerCase()
         return imageExtensions.includes(ext)
       })
-      .map((f) => (f as any).path)
+      .map((f) => (f as File & { path?: string }).path)
       .filter((p): p is string => typeof p === 'string' && p.length > 0)
 
     if (paths.length === 0) return

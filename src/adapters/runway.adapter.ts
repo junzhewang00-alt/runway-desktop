@@ -12,6 +12,10 @@ import {
 import { MODEL_CAPS } from '../types/models'
 import { logger } from '../logs/logger'
 
+// ── CDP 协议类型（替代 as any 断言）──
+interface CDPGetDocumentResult { root: { nodeId: number } }
+interface CDPQuerySelectorResult { nodeIds: number[] }
+
 export type GenerationStatus = 'idle' | 'generating' | 'completed' | 'failed'
 
 export interface GenerationResult {
@@ -402,13 +406,13 @@ export class RunwayAdapter implements IRunwayAdapter {
 
           // Step 2: CDP 查找 file input 并注入文件
           const docResult = await dbg.sendCommand('DOM.getDocument', { depth: 0 })
-          const rootNodeId: number = (docResult as any).root.nodeId
+          const rootNodeId: number = (docResult as CDPGetDocumentResult).root.nodeId
 
           const queryResult = await dbg.sendCommand('DOM.querySelectorAll', {
             nodeId: rootNodeId,
             selector: 'input[type="file"]',
           })
-          const nodeIds: number[] = (queryResult as any).nodeIds || []
+          const nodeIds: number[] = (queryResult as CDPQuerySelectorResult).nodeIds || []
 
           if (nodeIds.length > 0) {
             // 使用最后一个 file input（通常是最新激活的参考槽对应的）
@@ -454,12 +458,12 @@ export class RunwayAdapter implements IRunwayAdapter {
 
         // 查找 <input type="file">（React 拖放区通常有隐藏的 file input）
         const docResult = await dbg.sendCommand('DOM.getDocument', { depth: 0 })
-        const rootNodeId: number = (docResult as any).root.nodeId
+        const rootNodeId: number = (docResult as CDPGetDocumentResult).root.nodeId
         const queryResult = await dbg.sendCommand('DOM.querySelectorAll', {
           nodeId: rootNodeId,
           selector: 'input[type="file"]',
         })
-        const nodeIds: number[] = (queryResult as any).nodeIds || []
+        const nodeIds: number[] = (queryResult as CDPQuerySelectorResult).nodeIds || []
         useCDP = nodeIds.length > 0
 
         if (useCDP) {
@@ -1483,7 +1487,7 @@ export class RunwayAdapter implements IRunwayAdapter {
             // 查找所有生成条目（Runway 通常用卡片/列表项展示生成历史）
             // 已完成的有 video/download 按钮，进行中的有 progress 条
             var items = document.querySelectorAll(
-              '[class*="Generation"], [class*="generation"], ' +
+              ' + RUNWAY_SELECTORS.generationItems.slice(0, -1) + ', ' +
               '[class*="AssetItem"], [class*="assetItem"], ' +
               '[class*="HistoryItem"], [class*="historyItem"], ' +
               '[data-testid*="generation"], [data-testid*="asset"]'

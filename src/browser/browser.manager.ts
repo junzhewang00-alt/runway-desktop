@@ -87,8 +87,8 @@ export class BrowserManager implements IBrowserManager {
     if (!this.hostWindow) return
 
     this.browserView = null
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(this.hostWindow.setBrowserView as any)(null)
+    // setBrowserView(null) 移除旧 BrowserView；Electron 类型定义限制需显式断言
+    ;(this.hostWindow.setBrowserView as (bv: BrowserView | null) => void)(null)
 
     this.attachTo(this.hostWindow, this.initialBounds)
     this.loadURL(BrowserManager.RUNWAY_URL)

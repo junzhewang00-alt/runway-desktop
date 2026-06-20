@@ -2,28 +2,53 @@
 // Runway 会检测非标准浏览器环境并降级为阉割版
 // 此脚本在 Runway 页面代码执行前注入，隐藏 Electron 特征
 
+interface FakePlugin {
+  name: string
+  filename: string
+  description: string
+}
+
+interface FakeMimeType {
+  type: string
+  suffixes: string
+  description: string
+}
+
+interface FakeChrome {
+  runtime: { id: string }
+  loadTimes: () => Record<string, never>
+  csi: () => Record<string, never>
+  app: {
+    isInstalled?: boolean
+    InstallState?: Record<string, string>
+    RunningState?: Record<string, string>
+  }
+  webstore?: undefined
+}
+
 // 1. 隐藏 webdriver 标记
 Object.defineProperty(navigator, 'webdriver', { get: () => false })
 
 // 2. 伪造 Chrome runtime 对象
-;(window as any).chrome = {
+const chromeApi: FakeChrome = {
   runtime: { id: 'fake-chrome-id' },
   loadTimes: () => ({}),
   csi: () => ({}),
   app: {},
 }
+;(window as Window & { chrome?: FakeChrome }).chrome = chromeApi
 
 // 3. 伪造 plugins（Chrome 有 PDF Viewer 等）
 Object.defineProperty(navigator, 'plugins', {
   get: () => {
-    const plugins: any[] = [
+    const plugins: FakePlugin[] = [
       { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
       { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
       { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
-    ]
-    plugins.item = (i: number) => plugins[i] || null
-    plugins.namedItem = (name: string) => plugins.find((p) => p.name === name) || null
-    plugins.refresh = () => {}
+    ] as FakePlugin[] & { item: (i: number) => FakePlugin | null; namedItem: (name: string) => FakePlugin | null; refresh: () => void }
+    ;(plugins as FakePlugin[] & { item: (i: number) => FakePlugin | null }).item = (i: number) => plugins[i] || null
+    ;(plugins as FakePlugin[] & { namedItem: (name: string) => FakePlugin | null }).namedItem = (name: string) => plugins.find((p) => p.name === name) || null
+    ;(plugins as FakePlugin[] & { refresh: () => void }).refresh = () => {}
     Object.setPrototypeOf(plugins, PluginArray.prototype)
     return plugins
   },
@@ -33,12 +58,12 @@ Object.defineProperty(navigator, 'plugins', {
 // 4. 伪造 mimeTypes
 Object.defineProperty(navigator, 'mimeTypes', {
   get: () => {
-    const mimeTypes: any[] = [
+    const mimeTypes: FakeMimeType[] = [
       { type: 'application/pdf', suffixes: 'pdf', description: '' },
       { type: 'text/pdf', suffixes: 'pdf', description: '' },
-    ]
-    mimeTypes.item = (i: number) => mimeTypes[i] || null
-    mimeTypes.namedItem = (name: string) => mimeTypes.find((m) => m.type === name) || null
+    ] as FakeMimeType[] & { item: (i: number) => FakeMimeType | null; namedItem: (name: string) => FakeMimeType | null }
+    ;(mimeTypes as FakeMimeType[] & { item: (i: number) => FakeMimeType | null }).item = (i: number) => mimeTypes[i] || null
+    ;(mimeTypes as FakeMimeType[] & { namedItem: (name: string) => FakeMimeType | null }).namedItem = (name: string) => mimeTypes.find((m) => m.type === name) || null
     Object.setPrototypeOf(mimeTypes, MimeTypeArray.prototype)
     return mimeTypes
   },
@@ -58,7 +83,7 @@ Object.defineProperty(navigator, 'hardwareConcurrency', {
 })
 
 // 7. 伪装 deviceMemory
-Object.defineProperty(navigator as any, 'deviceMemory', {
+Object.defineProperty(navigator as Navigator & { deviceMemory?: number }, 'deviceMemory', {
   get: () => 8,
   configurable: true,
 })
@@ -70,12 +95,12 @@ Object.defineProperty(navigator, 'platform', {
 })
 
 // 9. 添加 Chrome 特有属性
-;(window as any).chrome = (window as any).chrome || {}
-Object.assign((window as any).chrome, {
+;(window as Window & { chrome?: FakeChrome }).chrome = {
+  ...(window as Window & { chrome?: FakeChrome }).chrome,
   app: {
     isInstalled: false,
     InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
     RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
   },
   webstore: undefined,
-})
+}
