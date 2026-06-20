@@ -348,12 +348,4 @@ const styles: Record<string, React.CSSProperties> = {
   },
 }
 
-// 注入 pulse 动画
-if (typeof document !== 'undefined' && !document.getElementById('qs-pulse-style')) {
-  const style = document.createElement('style')
-  style.id = 'qs-pulse-style'
-  style.textContent = '@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }'
-  document.head.appendChild(style)
-}
-
 export default QueueStatusPanel
