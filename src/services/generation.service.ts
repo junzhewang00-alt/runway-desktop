@@ -114,10 +114,10 @@ export class GenerationService implements IGenerationService {
     }
   }
 
-  /** 下载视频到本地 downloads 目录，带超时和单次重试 */
+  /** 下载视频到本地 downloads 目录，支持断点续传 */
   private downloadVideo(taskId: string, videoUrl: string, retryCount = 0): void {
-    const DOWNLOAD_TIMEOUT = 600_000 // 10 分钟超时（视频文件可能很大）
-    const MAX_RETRIES = 1
+    const DOWNLOAD_TIMEOUT = 600_000 // 10 分钟超时
+    const MAX_RETRIES = 3 // Range 续传不浪费带宽，提高重试上限
 
     try {
       const downloadsDir = path.join(app.getPath('downloads'), 'runway-desktop')
@@ -125,12 +125,23 @@ export class GenerationService implements IGenerationService {
         fs.mkdirSync(downloadsDir, { recursive: true })
       }
 
+      // 固定文件名（基于 taskId），支持断点续传时定位同一文件
       const ext = videoUrl.match(/\.(mp4|webm|mov)(\?|$)/i)?.[1] || 'mp4'
-      const filename = `${taskId.slice(0, 8)}_${Date.now()}.${ext}`
+      const filename = `${taskId.slice(0, 8)}.${ext}`
       const destPath = path.join(downloadsDir, filename)
+      const tempPath = destPath + '.part'
+
+      // 检查是否有未完成的下载
+      const resumePath = fs.existsSync(tempPath) ? tempPath
+        : fs.existsSync(destPath) ? destPath
+        : null
+      const downloadedBytes = resumePath ? fs.statSync(resumePath).size : 0
 
       let timedOut = false
-      const request = net.request(videoUrl)
+      const request = net.request({
+        url: videoUrl,
+        ...(downloadedBytes > 0 ? { headers: { Range: `bytes=${downloadedBytes}-` } } : {}),
+      })
 
       const timeoutId = setTimeout(() => {
         timedOut = true
@@ -140,7 +151,16 @@ export class GenerationService implements IGenerationService {
 
       request.on('response', (response) => {
         if (timedOut) return
-        const fileStream = fs.createWriteStream(destPath)
+
+        // 206 = 服务器支持 Range，续传；200 = 从头开始
+        const isResume = response.statusCode === 206
+        const flags = isResume || downloadedBytes > 0 ? 'a' : 'w'
+        const fileStream = fs.createWriteStream(resumePath || tempPath, { flags })
+
+        if (downloadedBytes > 0) {
+          this.logger?.info('Service', `Resuming download from byte ${downloadedBytes} (${isResume ? 'Range supported' : 'server ignored Range'})`, taskId)
+        }
+
         response.on('data', (chunk: Buffer) => {
           const ok = fileStream.write(chunk)
           if (!ok) {
@@ -151,13 +171,18 @@ export class GenerationService implements IGenerationService {
         response.on('end', () => {
           clearTimeout(timeoutId)
           fileStream.close()
-          this.logger?.info('Service', `Video downloaded: ${destPath}`, taskId)
+          // 下载完成：重命名 .part → 正式文件名
+          const finalPath = destPath
+          if (resumePath || tempPath !== destPath) {
+            try { fs.renameSync(resumePath || tempPath, finalPath) } catch { /* already renamed */ }
+          }
+          this.logger?.info('Service', `Video downloaded: ${finalPath} (${downloadedBytes > 0 ? 'resumed' : 'fresh'})`, taskId)
         })
         response.on('error', (err: Error) => {
           clearTimeout(timeoutId)
           fileStream.close()
-          this.cleanupPartialFile(destPath)
-          this.logger?.error('Service', `Download error: ${err.message}`, taskId)
+          // 保留部分文件供下次续传
+          this.logger?.error('Service', `Download error (partial kept for resume): ${err.message}`, taskId)
           if (retryCount < MAX_RETRIES) {
             this.downloadVideo(taskId, videoUrl, retryCount + 1)
           }
@@ -165,8 +190,8 @@ export class GenerationService implements IGenerationService {
       })
       request.on('error', (err: Error) => {
         clearTimeout(timeoutId)
-        this.cleanupPartialFile(destPath)
-        this.logger?.error('Service', `Download request error: ${err.message}`, taskId)
+        // 保留部分文件供下次续传
+        this.logger?.error('Service', `Download request error (partial kept for resume): ${err.message}`, taskId)
         if (retryCount < MAX_RETRIES) {
           this.downloadVideo(taskId, videoUrl, retryCount + 1)
         }
