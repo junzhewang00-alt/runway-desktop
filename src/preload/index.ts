@@ -6,8 +6,6 @@ const api = {
     create: (params: { prompt: string; modelId: string; priority?: string; note?: string; materialIds?: string[]; duration?: number; resolution?: string; aspectRatio?: string }) =>
       ipcRenderer.invoke('queue:create', params),
     list: (status?: string) => ipcRenderer.invoke('queue:list', status),
-    updateStatus: (id: string, status: string, error?: string) =>
-      ipcRenderer.invoke('queue:updateStatus', id, status, error),
     delete: (id: string) => ipcRenderer.invoke('queue:delete', id),
     retry: (id: string) => ipcRenderer.invoke('queue:retry', id),
   },
@@ -33,7 +31,6 @@ const api = {
   // Sprint 3: Session API
   session: {
     isLoggedIn: () => ipcRenderer.invoke('session:isLoggedIn'),
-    clear: () => ipcRenderer.invoke('session:clear'),
   },
 
   // Sprint 7: Model API
@@ -45,7 +42,6 @@ const api = {
   history: {
     list: (filter?: { modelId?: string; dateFrom?: number; dateTo?: number }, page?: number, pageSize?: number) =>
       ipcRenderer.invoke('history:list', filter, page, pageSize),
-    getById: (id: string) => ipcRenderer.invoke('history:getById', id),
   },
 
   // Sprint 6: Logger export
