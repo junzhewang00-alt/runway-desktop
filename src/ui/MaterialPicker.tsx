@@ -19,8 +19,29 @@ const MaterialPicker: React.FC<MaterialPickerProps> = ({
   const [materials, setMaterials] = useState<Material[]>([])
   const [pickedIds, setPickedIds] = useState<Set<string>>(() => new Set(selectedIds))
   const [loading, setLoading] = useState(true)
-  const [dragOver, setDragOver] = useState(false)
   const [importing, setImporting] = useState(false)
+
+  const { dragOver, handleDragOver, handleDragEnter, handleDragLeave, handleDrop, dragBorderColor } = useFileDrop({
+    onFiles: async (paths: string[]) => {
+      setImporting(true)
+      try {
+        const imported = await window.electronAPI.material.import(paths)
+        const list = await window.electronAPI.material.list()
+        setMaterials(list)
+        const newIds = imported.map((m) => m.id)
+        setPickedIds((prev) => {
+          const next = new Set(prev)
+          for (const id of newIds) {
+            if (next.size >= maxCount) break
+            next.add(id)
+          }
+          return next
+        })
+      } finally {
+        setImporting(false)
+      }
+    },
+  })
 
   const loadMaterials = useCallback(async () => {
     setLoading(true)
@@ -115,41 +136,6 @@ const MaterialPicker: React.FC<MaterialPickerProps> = ({
     }
   }
 
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
-
-    const files = Array.from(e.dataTransfer.files)
-    const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp']
-    const paths = files
-      .filter((f) => {
-        const ext = '.' + f.name.split('.').pop()?.toLowerCase()
-        return imageExtensions.includes(ext)
-      })
-      .map((f) => (f as File & { path?: string }).path)
-      .filter((p): p is string => typeof p === 'string' && p.length > 0)
-
-    if (paths.length === 0) return
-
-    setImporting(true)
-    try {
-      const imported = await window.electronAPI.material.import(paths)
-      const list = await window.electronAPI.material.list()
-      setMaterials(list)
-      const newIds = imported.map((m) => m.id)
-      setPickedIds((prev) => {
-        const next = new Set(prev)
-        for (const id of newIds) {
-          if (next.size >= maxCount) break
-          next.add(id)
-        }
-        return next
-      })
-    } finally {
-      setImporting(false)
-    }
-  }
-
   const currentCount = pickedIds.size
   const showWarning = currentCount >= maxCount
 
@@ -184,19 +170,12 @@ const MaterialPicker: React.FC<MaterialPickerProps> = ({
           className={`material-picker-drop-zone${dragOver ? ' drag-over' : ''}`}
           style={{
             ...styles.dropZone,
-            borderColor: dragOver ? 'var(--color-accent)' : 'var(--color-border)',
+            borderColor: dragBorderColor,
             background: dragOver ? 'var(--color-accent-subtle)' : 'var(--color-bg)',
           }}
-          onDragOver={(e) => {
-            e.preventDefault()
-            e.dataTransfer.dropEffect = 'copy'
-            setDragOver(true)
-          }}
-          onDragLeave={(e) => {
-            // Only set false if leaving the drop zone (not entering a child)
-            if (e.currentTarget.contains(e.relatedTarget as Node)) return
-            setDragOver(false)
-          }}
+          onDragOver={handleDragOver}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
           {loading && (

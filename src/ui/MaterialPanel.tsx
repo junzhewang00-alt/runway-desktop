@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { Material } from '../types/materials'
+import { useFileDrop } from './hooks/useFileDrop'
 
 const MaterialPanel: React.FC = () => {
   const [materials, setMaterials] = useState<Material[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
-  const [dragOver, setDragOver] = useState(false)
 
   const loadMaterials = () => {
     window.electronAPI.material.list().then(setMaterials)
@@ -49,37 +49,12 @@ const MaterialPanel: React.FC = () => {
       return next
     })
   }
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(true)
-  }
-
-  const handleDragLeave = () => {
-    setDragOver(false)
-  }
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
-
-    const files = Array.from(e.dataTransfer.files)
-    const imageExtensions = ['.png', '.jpg', '.jpeg', '.webp']
-
-    // Electron sandbox:false 时 File 对象有 .path 属性
-    const paths = files
-      .filter((f) => {
-        const ext = '.' + f.name.split('.').pop()?.toLowerCase()
-        return imageExtensions.includes(ext)
-      })
-      .map((f) => (f as File & { path?: string }).path)
-      .filter((p): p is string => typeof p === 'string' && p.length > 0)
-
-    if (paths.length > 0) {
+  const { dragOver, handleDragOver, handleDragLeave, handleDrop, dragBorderColor } = useFileDrop({
+    onFiles: async (paths: string[]) => {
       await window.electronAPI.material.import(paths)
       loadMaterials()
-    }
-  }
+    },
+  })
 
   return (
     <div
@@ -102,7 +77,7 @@ const MaterialPanel: React.FC = () => {
       <div
         style={{
           ...styles.grid,
-          borderColor: dragOver ? 'var(--color-accent)' : 'transparent',
+          borderColor: dragBorderColor,
         }}
       >
         {materials.length === 0 && (
