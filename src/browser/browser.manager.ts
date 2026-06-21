@@ -1,4 +1,4 @@
-import { BrowserView, BrowserWindow } from 'electron'
+import { BrowserView, BrowserWindow, nativeTheme } from 'electron'
 import path from 'path'
 import type { SessionManager } from './session.manager'
 import { getRunwayURL, getRunwayTeamSlug } from '../adapters/runway.selectors'
@@ -129,17 +129,11 @@ export class BrowserManager implements IBrowserManager {
 
   /** Runway 页面深色模式同步 */
   setDarkMode(enabled: boolean): void {
+    nativeTheme.themeSource = enabled ? 'dark' : 'light'
     if (!this.browserView) return
-    this.browserView.webContents.executeJavaScript(`
-      document.documentElement.style.colorScheme = '${enabled ? 'dark' : 'light'}';
-      let meta = document.querySelector('meta[name="color-scheme"]');
-      if (!meta) {
-        meta = document.createElement('meta');
-        meta.setAttribute('name', 'color-scheme');
-        document.head.appendChild(meta);
-      }
-      meta.setAttribute('content', '${enabled ? 'dark' : 'light'}');
-    `).catch(() => { /* page may not be loaded yet */ })
+    this.browserView.webContents.insertCSS(
+      enabled ? ':root{color-scheme:dark}' : ':root{color-scheme:light}'
+    ).catch(() => {})
   }
 
   /** 弹窗打开时移除 BrowserView（避免遮挡 React UI），关闭时恢复 */
