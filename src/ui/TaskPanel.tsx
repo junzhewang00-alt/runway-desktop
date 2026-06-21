@@ -5,6 +5,8 @@ import type { ModelCapability } from '../types/models'
 import ReferenceImageBar from './ReferenceImageBar'
 import MaterialPicker from './MaterialPicker'
 import type { Material } from '../types/materials'
+import ModelSelector from './ModelSelector'
+import ParameterPanel from './ParameterPanel'
 
 const STATUS_LABELS: TaskStatus[] = ['pending', 'running', 'completed', 'failed']
 
@@ -392,53 +394,22 @@ const TaskPanel: React.FC = () => {
 
       {/* 新建任务 */}
       <div style={styles.form}>
-        <select
-          value={modelId}
-          onChange={(e) => handleModelChange(e.target.value)}
-          style={styles.select}
-        >
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
+        <ModelSelector
+          modelId={modelId}
+          models={models}
+          onChange={handleModelChange}
+        />
 
         {/* 视频配置行：时长 / 分辨率 / 比例 */}
-        <div style={styles.configRow}>
-          <select
-            value={duration}
-            onChange={(e) => setDuration(Number(e.target.value))}
-            style={{ ...styles.select, flex: 1 }}
-            title="视频时长"
-          >
-            {currentCaps?.durations.map((d) => (
-              <option key={d} value={d}>{d}s</option>
-            ))}
-          </select>
-
-          <select
-            value={resolution}
-            onChange={(e) => setResolution(e.target.value)}
-            style={{ ...styles.select, flex: 1 }}
-            title="视频分辨率"
-          >
-            {currentCaps?.resolutions.map((r) => (
-              <option key={r} value={r}>{r}</option>
-            ))}
-          </select>
-
-          <select
-            value={aspectRatio}
-            onChange={(e) => setAspectRatio(e.target.value)}
-            style={{ ...styles.select, flex: 1 }}
-            title="画面比例"
-          >
-            {currentCaps?.aspectRatios.map((ar) => (
-              <option key={ar} value={ar}>{ar}</option>
-            ))}
-          </select>
-        </div>
+        <ParameterPanel
+          duration={duration}
+          resolution={resolution}
+          aspectRatio={aspectRatio}
+          cap={currentCaps}
+          onDurationChange={setDuration}
+          onResolutionChange={setResolution}
+          onAspectRatioChange={setAspectRatio}
+        />
 
         <select
           value={priority}
