@@ -1,6 +1,6 @@
 {
   "name": "canvas",
-  "version": "0.2.0",
+  "version": "3.0.0",
   "description": "Canvas — AI 视频创作工作台",
   "main": "./out/main/index.js",
   "scripts": {
