@@ -127,6 +127,21 @@ export class BrowserManager implements IBrowserManager {
     this.browserView.setBounds({ x, y, width, height })
   }
 
+  /** Runway 页面深色模式同步 */
+  setDarkMode(enabled: boolean): void {
+    if (!this.browserView) return
+    this.browserView.webContents.executeJavaScript(`
+      document.documentElement.style.colorScheme = '${enabled ? 'dark' : 'light'}';
+      let meta = document.querySelector('meta[name="color-scheme"]');
+      if (!meta) {
+        meta = document.createElement('meta');
+        meta.setAttribute('name', 'color-scheme');
+        document.head.appendChild(meta);
+      }
+      meta.setAttribute('content', '${enabled ? 'dark' : 'light'}');
+    `).catch(() => { /* page may not be loaded yet */ })
+  }
+
   /** 弹窗打开时移除 BrowserView（避免遮挡 React UI），关闭时恢复 */
   hide(): void {
     if (!this.browserView || !this.hostWindow) return

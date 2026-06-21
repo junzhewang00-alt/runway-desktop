@@ -26,6 +26,7 @@ const api = {
       ipcRenderer.invoke('browser:updateBounds', rect),
     hide: () => ipcRenderer.invoke('browser:hide'),
     show: () => ipcRenderer.invoke('browser:show'),
+    setDarkMode: (enabled: boolean) => ipcRenderer.invoke('browser:setDarkMode', enabled),
   },
 
   // Sprint 3: Session API

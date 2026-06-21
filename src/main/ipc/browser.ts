@@ -22,4 +22,8 @@ export function registerBrowserHandlers(): void {
   ipcMain.handle('browser:show', withIpcTimeout(() => {
     browserManager.show()
   }))
+
+  ipcMain.handle('browser:setDarkMode', withIpcTimeout((_event, enabled: boolean) => {
+    browserManager.setDarkMode(enabled)
+  }))
 }

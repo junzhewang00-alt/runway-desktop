@@ -69,6 +69,7 @@ const App: React.FC = () => {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
     try { localStorage.setItem(STORAGE_KEY_THEME, dark ? 'dark' : 'light') } catch { /* ok */ }
+    window.electronAPI.browser.setDarkMode(dark)
   }, [dark])
 
   const toggleLeftCollapse = useCallback(() => {
