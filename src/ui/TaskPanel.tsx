@@ -48,6 +48,25 @@ const TaskPanel: React.FC = () => {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<TaskStatus | null>(null)
 
+  // 下载进度
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, { percent: number }>>({})
+
+  // 轮询下载进度
+  useEffect(() => {
+    const poll = () => {
+      const completed = tasks.filter(t => t.status === 'completed')
+      if (completed.length === 0) return
+      completed.forEach(async (t) => {
+        const p = await window.electronAPI.download.getProgress(t.id)
+        if (p && p.percent < 100) {
+          setDownloadProgress(prev => ({ ...prev, [t.id]: { percent: p.percent } }))
+        }
+      })
+    }
+    const timer = setInterval(poll, 2000)
+    return () => clearInterval(timer)
+  }, [tasks])
+
   // 批量导入
   const [showBatch, setShowBatch] = useState(false)
   const [batchText, setBatchText] = useState('')
@@ -140,6 +159,13 @@ const TaskPanel: React.FC = () => {
     }
     window.addEventListener('copy-prompt', handler)
     return () => window.removeEventListener('copy-prompt', handler)
+  }, [])
+
+  // Esc 关闭素材选择器
+  useEffect(() => {
+    const handler = () => setShowMaterialPicker(false)
+    window.addEventListener('shortcut:close-modal', handler)
+    return () => window.removeEventListener('shortcut:close-modal', handler)
   }, [])
 
   const handleCreate = () => {
@@ -543,6 +569,12 @@ const TaskPanel: React.FC = () => {
               </button>
             )}
             {task.error && <p style={styles.error}>{task.error}</p>}
+            {downloadProgress[task.id] && (
+              <div style={styles.progressBar}>
+                <div style={{ ...styles.progressFill, width: `${downloadProgress[task.id].percent}%` }} />
+                <span style={styles.progressLabel}>{downloadProgress[task.id].percent}%</span>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -917,6 +949,30 @@ const styles: Record<string, React.CSSProperties> = {
     margin: 'var(--space-1) 0 0',
     fontSize: 'var(--text-xs)',
     color: 'var(--color-danger)',
+  },
+  progressBar: {
+    position: 'relative' as const,
+    height: 14,
+    background: 'var(--color-border-light)',
+    borderRadius: 'var(--radius-sm)',
+    marginTop: 'var(--space-2)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    background: 'var(--color-accent)',
+    borderRadius: 'var(--radius-sm)',
+    transition: 'width 0.3s ease',
+  },
+  progressLabel: {
+    position: 'absolute' as const,
+    top: 0,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    fontSize: 10,
+    color: 'var(--color-text)',
+    lineHeight: '14px',
+    fontWeight: 600,
   },
   modalOverlay: {
     position: 'fixed',

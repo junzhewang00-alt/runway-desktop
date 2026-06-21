@@ -55,6 +55,11 @@ const api = {
     diagnose: () => ipcRenderer.invoke('debug:diagnose'),
   },
 
+  // Download
+  download: {
+    getProgress: (taskId: string) => ipcRenderer.invoke('download:getProgress', taskId),
+  },
+
   // Sprint 14: Shortcuts
   shortcuts: {
     onFocusPrompt: (cb: () => void) => {
@@ -71,6 +76,16 @@ const api = {
       const handler = () => cb()
       ipcRenderer.on('shortcut:export-logs', handler)
       return () => ipcRenderer.removeListener('shortcut:export-logs', handler)
+    },
+    onSwitchPanel: (cb: (tab: string) => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, tab: string) => cb(tab)
+      ipcRenderer.on('shortcut:switch-panel', handler)
+      return () => ipcRenderer.removeListener('shortcut:switch-panel', handler)
+    },
+    onCloseModal: (cb: () => void) => {
+      const handler = () => cb()
+      ipcRenderer.on('shortcut:close-modal', handler)
+      return () => ipcRenderer.removeListener('shortcut:close-modal', handler)
     },
   },
 

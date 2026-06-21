@@ -72,6 +72,22 @@ const App: React.FC = () => {
     window.electronAPI.browser.setDarkMode(dark)
   }, [dark])
 
+  // 快捷键：Ctrl+1/2/3 切换面板
+  useEffect(() => {
+    return window.electronAPI.shortcuts.onSwitchPanel((tab: string) => {
+      if (tab === 'tasks' || tab === 'history' || tab === 'materials') {
+        setLeftTab(tab)
+      }
+    })
+  }, [])
+
+  // 快捷键：Esc 关闭弹窗
+  useEffect(() => {
+    return window.electronAPI.shortcuts.onCloseModal(() => {
+      window.dispatchEvent(new CustomEvent('shortcut:close-modal'))
+    })
+  }, [])
+
   const toggleLeftCollapse = useCallback(() => {
     setLeftCollapsed((prev) => {
       const next = !prev
