@@ -108,10 +108,10 @@ const MaterialPanel: React.FC = () => {
         {materials.length === 0 && (
           <div style={styles.emptyState}>
             <svg width="56" height="56" viewBox="0 0 56 56" fill="none" style={{ marginBottom: 'var(--space-4)', opacity: 0.5 }}>
-              <rect x="8" y="10" width="40" height="36" rx="6" stroke="var(--color-accent)" strokeWidth="1.2" fill="var(--color-accent-subtle)"/>
+              <rect x="8" y="10" width="40" height="36" rx="6" stroke="var(--color-accent)" strokeWidth="1.2" style={{ fill: 'var(--color-accent-subtle)' }}/>
               <circle cx="22" cy="26" r="6" stroke="var(--color-accent)" strokeWidth="1" opacity="0.5"/>
               <path d="M30,38 L42,18" stroke="var(--color-accent)" strokeWidth="1" strokeLinecap="round" opacity="0.4"/>
-              <polygon points="38,16 44,24 32,24" fill="var(--color-accent)" opacity="0.3"/>
+              <polygon points="38,16 44,24 32,24" style={{ fill: 'var(--color-accent)' }} opacity="0.3"/>
             </svg>
             <p style={styles.emptyText}>暂无素材</p>
             <p style={styles.emptyHint}>拖拽图片到此处或点击上方按钮导入</p>
@@ -236,10 +236,30 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: {
     width: '100%',
-    textAlign: 'center',
+    textAlign: 'center' as const,
     color: 'var(--color-text-muted)',
     fontSize: 'var(--text-base)',
     padding: 40,
+  },
+  emptyState: {
+    width: '100%',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 'var(--space-8) var(--space-4)',
+  },
+  emptyText: {
+    fontSize: 'var(--text-md)',
+    fontWeight: 600,
+    color: 'var(--color-text-muted)',
+    margin: 0,
+  },
+  emptyHint: {
+    fontSize: 'var(--text-xs)',
+    color: 'var(--color-text-muted)',
+    marginTop: 'var(--space-2)',
+    opacity: 0.7,
   },
   card: {
     position: 'relative',

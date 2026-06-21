@@ -487,11 +487,11 @@ const TaskPanel: React.FC = () => {
         {filteredTasks.length === 0 && (
           <div style={styles.emptyState}>
             <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{ marginBottom: 'var(--space-4)', opacity: 0.6 }}>
-              <rect x="12" y="6" width="36" height="48" rx="4" stroke="var(--color-accent)" strokeWidth="1.5" fill="var(--color-accent-subtle)"/>
+              <rect x="12" y="6" width="36" height="48" rx="4" stroke="var(--color-accent)" strokeWidth="1.5" style={{ fill: 'var(--color-accent-subtle)' }}/>
               <line x1="20" y1="18" x2="40" y2="18" stroke="var(--color-accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
               <line x1="20" y1="24" x2="36" y2="24" stroke="var(--color-accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
               <line x1="20" y1="30" x2="32" y2="30" stroke="var(--color-accent)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5"/>
-              <circle cx="38" cy="42" r="12" stroke="var(--color-accent)" strokeWidth="1.2" fill="var(--color-surface)"/>
+              <circle cx="38" cy="42" r="12" stroke="var(--color-accent)" strokeWidth="1.2" style={{ fill: 'var(--color-surface)' }}/>
               <polyline points="32,42 37,47 45,37" stroke="var(--color-accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
             </svg>
             <p style={styles.emptyText}>

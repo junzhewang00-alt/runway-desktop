@@ -112,10 +112,10 @@ const HistoryPanel: React.FC = () => {
         {generations.length === 0 && (
           <div style={styles.emptyState}>
             <svg width="64" height="64" viewBox="0 0 64 64" fill="none" style={{ marginBottom: 'var(--space-4)', opacity: 0.6 }}>
-              <circle cx="32" cy="32" r="22" stroke="var(--color-accent)" strokeWidth="1.5" fill="var(--color-accent-subtle)"/>
+              <circle cx="32" cy="32" r="22" stroke="var(--color-accent)" strokeWidth="1.5" style={{ fill: 'var(--color-accent-subtle)' }}/>
               <circle cx="32" cy="32" r="18" stroke="var(--color-accent)" strokeWidth="0.8" opacity="0.3"/>
               <polyline points="32,18 32,32 42,32" stroke="var(--color-accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <circle cx="32" cy="32" r="3" fill="var(--color-accent)"/>
+              <circle cx="32" cy="32" r="3" style={{ fill: 'var(--color-accent)' }}/>
             </svg>
             <p style={styles.emptyText}>暂无历史记录</p>
             <p style={styles.emptyHint}>完成第一个生成任务后这里会出现记录</p>

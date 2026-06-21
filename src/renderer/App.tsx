@@ -16,6 +16,7 @@ const STORAGE_KEY_LEFT = 'runway-layout-left-width'
 const STORAGE_KEY_RIGHT = 'runway-layout-right-width'
 const STORAGE_KEY_LEFT_COLLAPSED = 'runway-layout-left-collapsed'
 const STORAGE_KEY_RIGHT_COLLAPSED = 'runway-layout-right-collapsed'
+const STORAGE_KEY_THEME = 'runway-theme'
 const COLLAPSED_WIDTH = 40
 
 /** 从 localStorage 读取保存的宽度，无记录时返回 null */
@@ -60,6 +61,15 @@ const App: React.FC = () => {
   const [rightCollapsed, setRightCollapsed] = useState(() => {
     try { return localStorage.getItem(STORAGE_KEY_RIGHT_COLLAPSED) === 'true' } catch { return false }
   })
+  const [dark, setDark] = useState(() => {
+    try { return localStorage.getItem(STORAGE_KEY_THEME) === 'dark' } catch { return false }
+  })
+
+  // 主题初始化 & 同步
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
+    try { localStorage.setItem(STORAGE_KEY_THEME, dark ? 'dark' : 'light') } catch { /* ok */ }
+  }, [dark])
 
   const toggleLeftCollapse = useCallback(() => {
     setLeftCollapsed((prev) => {
@@ -219,6 +229,9 @@ const App: React.FC = () => {
         ) : (
           <>
             <div style={{ ...styles.tabBar, justifyContent: 'flex-end' }}>
+              <button onClick={() => setDark(d => !d)} style={styles.themeBtn} title={dark ? '浅色模式' : '深色模式'}>
+                {dark ? '☀' : '☾'}
+              </button>
               <button onClick={toggleRightCollapse} style={styles.collapseBtn} title="折叠面板">»</button>
             </div>
             <div style={{ flex: 1, overflow: 'hidden' }}>
