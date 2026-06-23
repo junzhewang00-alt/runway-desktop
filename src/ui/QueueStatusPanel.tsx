@@ -54,6 +54,10 @@ const QueueStatusPanel: React.FC = () => {
   const completed = counts.completed
   const failed = counts.failed
 
+  const maxSlots = 2
+  const usedSlots = Math.min(running.length, maxSlots)
+  const freeSlots = maxSlots - usedSlots
+
   const levelColor = (level: string) => {
     switch (level) {
       case 'error': return '#d9534f'
@@ -67,12 +71,32 @@ const QueueStatusPanel: React.FC = () => {
       {/* 队列状态 */}
       <div style={styles.statusSection}>
         <h3 style={styles.title}>状态</h3>
+
+        {/* 槽位指示器 */}
+        <div style={styles.slotRow}>
+          <span style={styles.slotLabel}>槽位</span>
+          <div style={styles.slotDots}>
+            {Array.from({ length: maxSlots }).map((_, i) => (
+              <div key={i} style={{
+                ...styles.slotDot,
+                background: i < usedSlots ? 'var(--color-accent)' : 'var(--color-border)',
+                boxShadow: i < usedSlots ? '0 0 8px var(--color-accent-subtle)' : 'none',
+                animation: i < usedSlots ? 'pulse 1.5s ease-in-out infinite' : 'none',
+              }} />
+            ))}
+          </div>
+          <span style={styles.slotText}>
+            {freeSlots > 0 ? `${freeSlots} 空闲` : '槽位已满'}
+          </span>
+        </div>
+
+        {/* 数统计 */}
         <div style={styles.statsGrid}>
-          <div style={{ ...styles.statCard, borderLeftColor: 'var(--color-warning)' }}>
+          <div style={{ ...styles.statCard, borderLeftColor: freeSlots > 0 ? 'var(--color-success)' : 'var(--color-warning)' }}>
             <div style={styles.statValue}>{pending}</div>
             <div style={styles.statLabel}>排队中</div>
           </div>
-          <div style={{ ...styles.statCard, borderLeftColor: 'var(--color-info)' }}>
+          <div style={{ ...styles.statCard, borderLeftColor: 'var(--color-accent)' }}>
             <div style={styles.statValue}>{running.length}</div>
             <div style={styles.statLabel}>生成中</div>
           </div>
