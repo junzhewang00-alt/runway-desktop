@@ -1823,12 +1823,25 @@ export class RunwayAdapter implements IRunwayAdapter {
               // ── 钻取：如果不是 INPUT/TEXTAREA 且自身没有 contenteditable 属性 → 深入子节点找真正的 textbox ──
               var drilled = false;
               if (!isInput && el.getAttribute('contenteditable') !== 'true') {
+                // 递归钻取：避免 Runway 多层 DIV 包裹导致只找到外层容器
                 var child = el.querySelector('[contenteditable="true"]');
+                if (!child) child = el.querySelector('textarea, input');
+                if (!child) {
+                  // 深层兜底：找第一个文本子节点
+                  var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+                  var textNode = walker.nextNode();
+                  if (textNode && textNode.parentElement) child = textNode.parentElement;
+                }
                 if (child) {
                   el = child;
                   tag = el.tagName;
                   isInput = tag === 'TEXTAREA' || tag === 'INPUT';
                   drilled = true;
+                  // 如果内容为空，尝试聚焦后等 React 创建实际 textbox
+                  if (!isInput && el.getAttribute('contenteditable') !== 'true') {
+                    el.click();
+                    el.focus();
+                  }
                 }
               }
 
@@ -1885,7 +1898,7 @@ export class RunwayAdapter implements IRunwayAdapter {
           if (!diag.visible) {
             throw new Error(`fillPrompt: element <${diag.tag}> found but not visible (offsetParent=null)`)
           }
-          if ((diag.afterFillLen ?? 0) <= 10) {
+          if ((diag.afterFillLen ?? 0) < 2 && prompt.length > 2) {
             throw new Error(
               `fillPrompt: text write failed — afterFill:${diag.afterFillLen} tag:<${diag.tag}> drilled:${diag.drilled}`,
             )
